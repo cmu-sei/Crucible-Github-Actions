@@ -17,9 +17,19 @@ jobs:
           python-version: "3.x"
           architecture: "x64"
 
+      - name: Check current directory
+        run: pwd
+
+      # Action doesn't have access to local files of this repo when called from another repo
+      - name: Download the script
+        run: curl -o $PWD/header.py https://raw.githubusercontent.com/cmu-sei/Crucible-Github-Actions/main/.github/workflows/scripts/header.py
+
+      - name: Give script permissions
+        run: chmod +x $PWD/header.py
+
       - name: Check for and Add Headers
         run: |
-          python ./.github/workflows/header.py
+          python $PWD/header.py
 
       - name: Git Diff
         id: git_diff
