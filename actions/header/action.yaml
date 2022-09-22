@@ -1,5 +1,3 @@
-# Uses a composite action rather than a workflow
-# because a composite action can reference the local python script
 name: Header Check
 
 description: "Ensures that all files have a license header"
@@ -8,7 +6,12 @@ inputs:
   github_token:
     description: "Token for pushing header changes to the calling repository"
     required: true
+  use_block_comments:
+    description: "Use block comments in header if true. Defaults to false"
+    default: false
 
+# Uses a composite action rather than a workflow
+# because a composite action can reference the local python script
 runs:
   using: "composite"
   steps:
@@ -23,7 +26,7 @@ runs:
 
     - name: Check for and Add Headers
       run: |
-        python ${{ github.action_path }}/header.py
+        python ${{ github.action_path }}/header.py ${{ inputs.use_block_comments }}
       shell: bash
 
     - name: Git Diff
