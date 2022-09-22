@@ -1,0 +1,50 @@
+# Uses a composite action rather than a workflow
+# because a composite action can reference the local python script
+name: Header Check
+
+description: "Ensures that all files have a license header"
+
+inputs:
+  github_token:
+    description: "Token for pushing header changes to the calling repository"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: ${{ github.head_ref }}
+
+    - uses: actions/setup-python@v2
+      with:
+        python-version: "3.x"
+        architecture: "x64"
+
+    - name: Check for and Add Headers
+      run: |
+        python ${{ github.action_path }}/header.py
+      shell: bash
+
+    - name: Git Diff
+      id: git_diff
+      run: |
+        FILESCHANGED=$(git diff --quiet || echo "TRUE")
+        echo "FILESCHANGED=$FILESCHANGED" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Commit and push files
+      if: env.FILESCHANGED == 'TRUE'
+      run: |
+        echo "Files have been changed"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git commit -m "Add missing document markings" -a
+      shell: bash
+
+    - name: Push changes
+      if: env.FILESCHANGED == 'TRUE'
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ inputs.github_token }}
+        branch: ${{ github.head_ref }}
