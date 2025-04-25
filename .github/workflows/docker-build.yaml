@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       imageName:
-        description: "Name of the image you want to build and push"
+        description: "Base name of the image (e.g., myorg/myimage)"
         type: string
         required: true
       tagName:
-        description: "Tag of the image you want to build and push"
+        description: "Optional explicit tag to use (overrides auto-detection)"
         type: string
         required: false
       dockerfilePath:
@@ -16,6 +16,14 @@ on:
         required: false
         default: ./Dockerfile
         type: string
+      additionalTarget:
+        description: "An additional Docker build target stage to build and push"
+        required: false
+        type: string
+      push:
+        description: "Use to override default push behavior. Set to true to force push, set to false to prevent push."
+        type: boolean
+        required: false
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -28,53 +36,95 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-      - name: Prepare
-        id: prep
+      - name: Determine Push Condition
+        id: push_condition
+        # Push unless the calling workflow was triggered by a pull_request, or the push input was set
         run: |
-          DOCKER_IMAGE=${{ inputs.imageName }}
-          VERSION=development
-          if [[ ! -z "${{ github.event.inputs.tagName }}" ]]; then
-            VERSION=${{ github.event.inputs.tagName }}
-            TAGS="${DOCKER_IMAGE}:${VERSION}"
-          elif [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-            MAJORMINORVERSION=$(echo $VERSION | grep -oP '(\d+)\.(\d+)')
-            TAGS="${DOCKER_IMAGE}:${VERSION},${DOCKER_IMAGE}:${MAJORMINORVERSION}"
-          elif [[ $GITHUB_REF == refs/heads/* ]]; then
-            VERSION=$(echo ${GITHUB_REF#refs/heads/} | sed -r 's#/+#-#g')
-            TAGS="${DOCKER_IMAGE}:${VERSION}"
+          PUSH=false
+          if [[ -n "$INPUT_PUSH" ]]; then
+            echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
+            PUSH=$INPUT_PUSH
+          else
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              PUSH=false
+            else
+              PUSH=true
+            fi
           fi
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo ::set-output name=push::false
-            echo "event is pull_request, not pushing image"
-          else        
-            echo ::set-output name=push::true
-            echo "event is not pull_request, pushing image"
-          fi
-          echo ::set-output name=version::${VERSION}
-          echo ::set-output name=tags::${TAGS}
-          echo ::set-output name=created::$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+          echo "push=$PUSH" >> $GITHUB_OUTPUT
+        env:
+          INPUT_PUSH: ${{ inputs.push }}
 
-      - name: Login to DockerHub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.push_condition.outputs.push == 'true'
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v2
+      - name: Docker Meta for primary image
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.imageName }}
+          tags: |
+            type=raw,value=${{ inputs.tagName }},enable=${{ inputs.tagName != '' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=branch,enable=${{ inputs.tagName == '' && !startsWith(github.ref, 'refs/tags/') }}
+          flavor: |
+            latest=false
+
+      # Generate the tags for the additional target based on the primary tags
+      - name: Generate Additional Target Tags
+        if: inputs.additionalTarget != ''
+        id: target_tags
+        run: |
+          TARGET_TAGS=""
+          readarray -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          for full_tag in "${TAG_ARRAY[@]}"; do
+            # Extract just the tag part after the colon
+            tag_part="${full_tag##*:}"
+            # Get the base image name
+            image_name="${full_tag%%:*}"
+            # Construct the new tag
+            new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
+            if [[ ! -z "$TARGET_TAGS" ]]; then
+              TARGET_TAGS="${TARGET_TAGS},"
+            fi
+            TARGET_TAGS="${TARGET_TAGS}${new_tag}"
+          done
+          echo "tags=${TARGET_TAGS}" >> $GITHUB_OUTPUT
+          echo "Generated additional target tags: ${TARGET_TAGS}"
+
+      - name: Build and push default stage
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ${{ inputs.dockerfilePath }}
-          push: ${{ steps.prep.outputs.push }}
+          push: ${{ steps.push_condition.outputs.push }}
           pull: true
-          tags: ${{ steps.prep.outputs.tags }}
-          labels: |
-            org.opencontainers.image.source=${{ github.event.repository.clone_url }}
-            org.opencontainers.image.created=${{ steps.prep.outputs.created }}
-            org.opencontainers.image.revision=${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push additional target
+        if: inputs.additionalTarget != ''
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          target: ${{ inputs.additionalTarget }}
+          push: ${{ steps.push_condition.outputs.push }}
+          pull: true
+          tags: ${{ steps.target_tags.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
