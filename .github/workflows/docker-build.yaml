@@ -22,7 +22,7 @@ on:
         type: string
       push:
         description: "Use to override default push behavior. Set to true to force push, set to false to prevent push."
-        type: boolean
+        type: string
         required: false
 
     secrets:
@@ -43,7 +43,7 @@ jobs:
         # Push unless the calling workflow was triggered by a pull_request, or the push input was set
         run: |
           PUSH=false
-          if [[ "$INPUT_PUSH_SET" == "true" ]]; then
+          if [ -n "$INPUT_PUSH" ]; then
             echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
             PUSH=$INPUT_PUSH
           else
@@ -55,7 +55,6 @@ jobs:
           fi
           echo "push=$PUSH" >> $GITHUB_OUTPUT
         env:
-          INPUT_PUSH_SET: ${{ inputs.push != null }}
           INPUT_PUSH: ${{ inputs.push }}
 
       - name: Set up Docker Buildx
