@@ -21,7 +21,7 @@ on:
         required: false
         type: string
       push:
-        description: "Use to override default push behavior. Set to true to force push, set to false to prevent push."
+        description: "Use to override default push behavior. If false, will not push, even from a release."
         type: string
         required: false
 
@@ -42,19 +42,20 @@ jobs:
         id: push_condition
         # Push unless the calling workflow was triggered by a pull_request, or the push input was set
         run: |
-          PUSH=false
-          if [ -n "$INPUT_PUSH" ]; then
-            echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
-            PUSH=$INPUT_PUSH
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "Workflow triggered by pull_request. Will not push."
+            PUSH=false
           else
-            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-              echo "Workflow triggered by pull_request. Will not push."
-              PUSH=false
+            echo "Not a pull request"
+            if [ -n "$INPUT_PUSH" ]; then
+              echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
+              PUSH=$INPUT_PUSH
             else
-              echo "No push override and not a pull request. Will push by default."
+              echo "No push override. Will push by default."
               PUSH=true
             fi
           fi
+
           echo "Final push decision: $PUSH"
           echo "push=$PUSH" >> $GITHUB_OUTPUT
         env:
