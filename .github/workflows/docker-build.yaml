@@ -43,7 +43,7 @@ jobs:
         # Push unless the calling workflow was triggered by a pull_request, or the push input was set
         run: |
           PUSH=false
-          if [[ -n "$INPUT_PUSH_SET" == "true" ]]; then
+          if [[ "$INPUT_PUSH_SET" == "true" ]]; then
             echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
             PUSH=$INPUT_PUSH
           else
