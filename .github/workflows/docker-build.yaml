@@ -98,11 +98,10 @@ jobs:
             # Get the base image name
             image_name="${full_tag%%:*}"
 
-            # Only append dash if tag_part is not empty
-            if [[ -n "$tag_part" ]]; then
-              new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
-            else
-              new_tag="${image_name}:${{ inputs.additionalTarget }}"
+            # Skip if tag_part is empty
+            if [[ -z "$tag_part" ]]; then
+              echo "Skipping tag with empty tag_part for: $full_tag"
+              continue
             fi
 
             if [[ ! -z "$TARGET_TAGS" ]]; then
