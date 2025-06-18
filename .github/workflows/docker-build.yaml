@@ -92,6 +92,7 @@ jobs:
         run: |
           TARGET_TAGS=""
           readarray -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+
           for full_tag in "${TAG_ARRAY[@]}"; do
             # Extract just the tag part after the colon
             tag_part="${full_tag##*:}"
@@ -104,11 +105,14 @@ jobs:
               continue
             fi
 
+            new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
+
             if [[ ! -z "$TARGET_TAGS" ]]; then
               TARGET_TAGS="${TARGET_TAGS},"
             fi
             TARGET_TAGS="${TARGET_TAGS}${new_tag}"
           done
+
           echo "tags=${TARGET_TAGS}" >> $GITHUB_OUTPUT
           echo "Generated additional target tags: ${TARGET_TAGS}"
 
