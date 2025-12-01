@@ -23,14 +23,14 @@ The action:
 
 | Name | Required | Description |
 | --- | --- | --- |
-| `github_app_name` | ✅ | Friendly name used for commit and PR title, e.g. `TopoMojo API`. |
+| `app_name` | ✅ | Friendly application name used for commit and PR title, e.g. `TopoMojo API`. |
 | `github_app_id` | ✅ | Optional GitHub App ID that should mint a token for pushing to the Helm repo. Provide via a secret. |
 | `github_app_private_key` | ✅ | Private key for the GitHub App. Provide via a secret. |
 | `chart_file` | ✅ | Path to the application's `Chart.yaml` within the Helm repo, e.g. `charts/topomojo/charts/topomojo-api/Chart.yaml`. |
 | `release_tag` |  | Tag from the calling workflow (defaults to `${{ github.event.release.tag_name }}`). |
 | `parent_chart_file` |  | Optional path to a parent `Chart.yaml` that should be bumped. |
 | `helm_chart_repo` |  | Helm charts repo (`cmu-sei/helm-charts` by default). |
-| `helm_repo_token` |  | Optional token override; if omitted the action uses `HELM_REPO_TOKEN`/`GH_TOKEN` from the environment. |
+| `helm_repo_token` |  | Optional repository token override. |
 | `git_user_name` |  | Commit author name (`github-actions[bot]`). |
 | `git_user_email` |  | Commit author email (`41898282+github-actions[bot]@users.noreply.github.com`). |
 
@@ -60,7 +60,9 @@ jobs:
       - name: Update Helm chart
         uses: cmu-sei/Crucible-Github-Actions/actions/update-helm-chart@main
         with:
-          github_app_name: TopoMojo API
+          app_name: TopoMojo API
+          github_app_id: ${{ secrets.CRUCIBLE_HELM_UPDATE_APP_ID }}
+          github_app_private_key: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
           chart_file: charts/topomojo/charts/topomojo-api/Chart.yaml
           parent_chart_file: charts/topomojo/Chart.yaml
 ```
@@ -68,10 +70,8 @@ jobs:
 ### Repository Configuration Checklist
 
 1. **Create credentials** for pushing to `cmu-sei/helm-charts`.
-   - Preferred: register a GitHub App with `contents:write` and `pull_request:write`, install it on `cmu-sei/helm-charts`, and store the app ID and private key as repository secrets (e.g., `CRUCIBLE_HELM_UPDATE_APP_ID`/`CRUCIBLE_HELM_UPDATE_PRIVATE_KEY`). The action reads those names by default, but you can override via inputs or expose different secret names through environment variables (`HELM_APP_ID`, `HELM_APP_PRIVATE_KEY`, etc.).
-   - Alternative: use a fine-grained PAT limited to the Helm charts repo and store as `HELM_CHARTS_TOKEN`; expose it to the workflow as `HELM_REPO_TOKEN` (or pass it via the optional `helm_repo_token` input if preferred).
-
-`with` passes explicit inputs to the composite action (e.g., `github_app_name` or `chart_file`), whereas `env` sets environment variables that the step can read—handy when shell commands or multiple actions need the same token. If you prefer, provide your own `HELM_APP_ID`/`HELM_APP_PRIVATE_KEY` or `HELM_REPO_TOKEN` via `env` instead of `with`.
+   - Preferred: register a GitHub App with `contents:write` and `pull_request:write`, install it on `cmu-sei/helm-charts`, and store the app ID and private key as repository secrets (e.g., `CRUCIBLE_HELM_UPDATE_APP_ID`/`CRUCIBLE_HELM_UPDATE_PRIVATE_KEY`).
+   - Alternative: use a fine-grained PAT limited to the Helm charts repo and store as `HELM_CHARTS_TOKEN`; pass it via the optional `helm_repo_token` input.
 2. **Add the workflow** (example above) to the application repository.
    - Trigger on `release` with `types: [published]`.
 3. **Reference the action** with a tagged version or commit SHA.
@@ -80,7 +80,7 @@ jobs:
    - `parent_chart_file` should list any umbrella chart `Chart.yaml` files that need a version bump.
 
 When the workflow runs on a release event it will push a feature branch directly to
-`cmu-sei/helm-charts` named `update-<slug>-<version>` and open a PR titled
+`cmu-sei/helm-charts` (or your configured `helm_chart_repo`) named `update-<slug>-<version>` and open a PR titled
 `<App name> to <version>`.
 
 ### Header Check

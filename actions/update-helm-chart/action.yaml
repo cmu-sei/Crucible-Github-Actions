@@ -3,7 +3,7 @@ name: Update Helm Chart
 description: "Updates a Helm chart's app version, bumps chart versions, and opens a PR in the helm-charts repository."
 
 inputs:
-  github_app_name:
+  app_name:
     description: "Display name of the application (used in PR title and commit message)."
     required: true
   github_app_id:
@@ -98,7 +98,7 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.helm_chart_repo }}
-        token: ${{ inputs.helm_repo_token || steps.mint_token.outputs.token || env.GH_TOKEN || github.token }}
+        token: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
         path: helm-charts
         ref: main
 
@@ -121,7 +121,7 @@ runs:
           --chart-file "${{ inputs.chart_file }}" \
           --parent-chart-file "${{ inputs.parent_chart_file }}" \
           --release-tag "${{ inputs.release_tag }}" \
-          --app-name "${{ inputs.github_app_name }}" \
+          --app-name "${{ inputs.app_name }}" \
           --github-output "$GITHUB_OUTPUT"
       shell: bash
 
@@ -135,7 +135,7 @@ runs:
       if: steps.update.outputs.has_changes == 'true'
       working-directory: helm-charts
       env:
-        APP_NAME: ${{ inputs.github_app_name }}
+        APP_NAME: ${{ inputs.app_name }}
         APP_VERSION: ${{ steps.update.outputs.new_app_version }}
       run: |
         git config user.name "${{ inputs.git_user_name }}"
@@ -154,10 +154,10 @@ runs:
       if: steps.update.outputs.has_changes == 'true'
       working-directory: helm-charts
       env:
-        GH_TOKEN: ${{ inputs.helm_repo_token || steps.mint_token.outputs.token || env.HELM_REPO_TOKEN || env.GH_TOKEN || github.token }}
+        GH_TOKEN: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
         GH_REPO: ${{ inputs.helm_chart_repo }}
         BRANCH: ${{ steps.update.outputs.branch_name }}
-        APP_NAME: ${{ inputs.github_app_name }}
+        APP_NAME: ${{ inputs.app_name }}
         APP_VERSION: ${{ steps.update.outputs.new_app_version }}
         RELEASE_TYPE: ${{ steps.update.outputs.release_type }}
       run: |
