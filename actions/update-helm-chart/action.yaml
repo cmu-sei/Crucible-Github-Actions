@@ -7,7 +7,7 @@ inputs:
     description: "Display name of the application (used in PR title and commit message)."
     required: true
   github_app_id:
-    description: "Optional GitHub App ID used to mint a token for the Helm repo."
+    description: "GitHub App ID used to mint a token for the Helm repo."
     required: true
   github_app_private_key:
     description: "Private key for the GitHub App when minting a token."
@@ -28,7 +28,7 @@ inputs:
     required: false
     default: ${{ github.event.release.tag_name }}
   helm_repo_token:
-    description: "Token with push and PR permissions for the Helm charts repository. Optional if GH_TOKEN or HELM_REPO_TOKEN env vars are set."
+    description: "Token with push and PR permissions for the Helm charts repository. Optional to use instead of a GitHub App."
     required: false
     default: ""
   # See the checkout actions docs (https://github.com/actions/checkout?tab=readme-ov-file#push-a-commit-using-the-built-in-token)
