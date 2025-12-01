@@ -6,8 +6,11 @@ inputs:
   app_name:
     description: "Display name of the application (used in PR title and commit message)."
     required: true
-  release_tag:
-    description: "Release tag that triggered the workflow (e.g. v2.5.2)."
+  github_app_id:
+    description: "GitHub App ID used to mint a token for the Helm repo."
+    required: true
+  github_app_private_key:
+    description: "Private key for the GitHub App when minting a token."
     required: true
   chart_file:
     description: "Path (within the helm-charts repo) to the Chart.yaml for the application."
@@ -16,22 +19,28 @@ inputs:
     description: "Optional path to a parent Chart.yaml to bump."
     required: false
     default: ""
-  helm_repo:
+  helm_chart_repo:
     description: "Target Helm charts repository."
     required: false
     default: "cmu-sei/helm-charts"
+  release_tag:
+    description: "Release tag that triggered the workflow (e.g. v2.5.2)."
+    required: false
+    default: ${{ github.event.release.tag_name }}
   helm_repo_token:
-    description: "Token with push and PR permissions for the Helm charts repository. Optional if GH_TOKEN or HELM_REPO_TOKEN env vars are set."
+    description: "Token with push and PR permissions for the Helm charts repository. Optional to use instead of a GitHub App."
     required: false
     default: ""
+  # See the checkout actions docs (https://github.com/actions/checkout?tab=readme-ov-file#push-a-commit-using-the-built-in-token)
+  #  for an example of the default actions bot user (https://api.github.com/users/github-actions%5Bbot%5D)
   git_user_name:
     description: "Git username for commits."
     required: false
-    default: "crucible-bot"
+    default: "github-actions[bot]"
   git_user_email:
     description: "Git user email for commits."
     required: false
-    default: "crucible-bot@users.noreply.github.com"
+    default: "41898282+github-actions[bot]@users.noreply.github.com"
 outputs:
   new_app_version:
     description: "Normalized application version extracted from the release tag."
@@ -58,11 +67,38 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Derive Helm repo owner/name
+      id: repo_meta
+      shell: bash
+      env:
+        HELM_REPO: ${{ inputs.helm_chart_repo }}
+      run: |
+        if [[ "$HELM_REPO" != */* ]]; then
+          echo "helm_chart_repo must be provided in the form <owner>/<repo> (e.g., cmu-sei/helm-charts)" >&2
+          exit 1
+        fi
+        owner="${HELM_REPO%%/*}"
+        name="${HELM_REPO#*/}"
+        echo "owner=$owner" >> "$GITHUB_OUTPUT"
+        echo "name=$name" >> "$GITHUB_OUTPUT"
+
+    - name: Mint Helm charts app token
+      id: mint_token
+      if: >
+        (inputs.github_app_id != '') &&
+        (inputs.github_app_private_key != '')
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.github_app_id }}
+        private-key: ${{ inputs.github_app_private_key }}
+        owner: ${{ steps.repo_meta.outputs.owner }}
+        repositories: ${{ steps.repo_meta.outputs.name }}
+
     - name: Checkout Helm charts repository
       uses: actions/checkout@v4
       with:
-        repository: ${{ inputs.helm_repo }}
-        token: ${{ inputs.helm_repo_token || env.HELM_REPO_TOKEN || env.GH_TOKEN || github.token }}
+        repository: ${{ inputs.helm_chart_repo }}
+        token: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
         path: helm-charts
         ref: main
 
@@ -118,8 +154,8 @@ runs:
       if: steps.update.outputs.has_changes == 'true'
       working-directory: helm-charts
       env:
-        GH_TOKEN: ${{ inputs.helm_repo_token || env.HELM_REPO_TOKEN || env.GH_TOKEN || github.token }}
-        GH_REPO: ${{ inputs.helm_repo }}
+        GH_TOKEN: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
+        GH_REPO: ${{ inputs.helm_chart_repo }}
         BRANCH: ${{ steps.update.outputs.branch_name }}
         APP_NAME: ${{ inputs.app_name }}
         APP_VERSION: ${{ steps.update.outputs.new_app_version }}
