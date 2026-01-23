@@ -121,9 +121,7 @@ jobs:
             done
           elif [[ "${{ inputs.versionMode }}" == "csproj" ]]; then
             for f in "${FILES[@]}"; do
-              for key in Version InformationalVersion AssemblyVersion; do
-                perl -0777 -i -pe "s|<$key>.*?</$key>|<$key>$VERSION</$key>|g" "$f"
-              done
+              perl -0777 -i -pe "s|<Version>.*?</Version>|<Version>$VERSION</Version>|g" "$f"
             done
           else
             echo "Unknown versionMode: ${{ inputs.versionMode }}"
