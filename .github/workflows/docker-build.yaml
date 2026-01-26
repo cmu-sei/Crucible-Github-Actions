@@ -179,6 +179,11 @@ jobs:
           git add "${FILES[@]}"
           git commit -m "chore: set version to $VERSION"
 
+      - name: Push version bump commit to main branch
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
+        run: |
+          git push origin HEAD:main
+
       - name: Force-move tag to include version bump commit
         if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
         run: |
