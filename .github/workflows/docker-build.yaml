@@ -33,6 +33,20 @@ on:
         description: "Newline-separated file paths to update"
         type: string
         required: false
+      buildArgs:
+        description: "Optional docker build args (newline-separated: key=value)"
+        type: string
+        required: false
+      enableQemu:
+        description: "Set to true to enable QEMU for multi-arch builds"
+        type: boolean
+        required: false
+        default: false
+      preBuildCommands:
+        description: "Optional shell commands to run before docker build (e.g. fetch artifacts)"
+        type: string
+        required: false
+
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -71,6 +85,14 @@ jobs:
           echo "push=$PUSH" >> $GITHUB_OUTPUT
         env:
           INPUT_PUSH: ${{ inputs.push }}
+
+      - name: Pre-build commands
+        if: steps.push_condition.outputs.push == 'true' && inputs.preBuildCommands != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running pre-build commands..."
+          ${{ inputs.preBuildCommands }}
 
       - name: Determine version from tag
         id: version
@@ -158,6 +180,10 @@ jobs:
           git checkout -f "tags/$TAG"
           git rev-parse HEAD
 
+      - name: Set up QEMU
+        if: inputs.enableQemu
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -182,7 +208,6 @@ jobs:
           flavor: |
             latest=false
 
-      # Generate the tags for the additional target based on the primary tags
       - name: Generate Additional Target Tags
         if: inputs.additionalTarget != ''
         id: target_tags
@@ -222,6 +247,7 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.buildArgs }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -236,5 +262,7 @@ jobs:
           pull: true
           tags: ${{ steps.target_tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.buildArgs }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
