@@ -24,6 +24,38 @@ on:
         description: "Use to override default push behavior. If false, will not push, even from a release."
         type: string
         required: false
+      versionMode:
+        description: "none | npm | csproj"
+        type: string
+        required: false
+        default: "none"
+      versionFiles:
+        description: "Newline-separated file paths to update"
+        type: string
+        required: false
+      buildArgs:
+        description: "Optional docker build args (newline-separated: key=value)"
+        type: string
+        required: false
+      enableQemu:
+        description: "Set to true to enable QEMU for multi-arch builds"
+        type: boolean
+        required: false
+        default: false
+      preBuildCommands:
+        description: "Optional shell commands to run before docker build (e.g. fetch artifacts)"
+        type: string
+        required: false
+      gitUserName:
+        description: "Git username for commits."
+        type: string
+        required: false
+        default: "github-actions[bot]"
+      gitUserEmail:
+        description: "Git user email for commits."
+        type: string
+        required: false
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -36,7 +68,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Determine Push Condition
         id: push_condition
@@ -60,6 +94,107 @@ jobs:
           echo "push=$PUSH" >> $GITHUB_OUTPUT
         env:
           INPUT_PUSH: ${{ inputs.push }}
+
+      - name: Pre-build commands
+        if: steps.push_condition.outputs.push == 'true' && inputs.preBuildCommands != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running pre-build commands..."
+          ${{ inputs.preBuildCommands }}
+
+      - name: Determine version from tag
+        id: version
+        run: |
+          if [[ -n "${{ inputs.tagName }}" ]]; then
+            TAG="${{ inputs.tagName }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=""
+          fi
+
+          if [[ -z "$TAG" ]]; then
+            echo "No tag found; skipping version handling."
+            echo "tag=" >> $GITHUB_OUTPUT
+            echo "version=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Update app version files
+        id: update_versions
+        if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
+        run: |
+          echo "Updating version to: $VERSION"
+          mapfile -t FILES <<< "${{ inputs.versionFiles }}"
+
+          for f in "${FILES[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "Version file not found: $f"
+              exit 1
+            fi
+          done
+
+          if [[ "${{ inputs.versionMode }}" == "npm" ]]; then
+            for f in "${FILES[@]}"; do
+              node -e "
+                const fs = require('fs');
+                const p = '$f';
+                const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+                pkg.version = process.env.VERSION;
+                fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+              "
+            done
+          elif [[ "${{ inputs.versionMode }}" == "csproj" ]]; then
+            for f in "${FILES[@]}"; do
+              perl -0777 -i -pe "s|<Version>.*?</Version>|<Version>$VERSION</Version>|g" "$f"
+            done
+          else
+            echo "Unknown versionMode: ${{ inputs.versionMode }}"
+            exit 1
+          fi
+
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No version file changes detected."
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Version file changes detected:"
+            git diff
+          fi
+
+      - name: Commit version bump
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
+        run: |
+          git config user.name "${{ inputs.gitUserName }}"
+          git config user.email "${{ inputs.gitUserEmail }}"
+
+          mapfile -t FILES <<< "${{ inputs.versionFiles }}"
+          git add "${FILES[@]}"
+          git commit -m "chore: set version to $VERSION"
+
+      - name: Force-move tag to include version bump commit
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
+        run: |
+          git tag -f "$TAG"
+          git push origin -f "refs/tags/$TAG"
+
+      - name: Re-checkout moved tag (so build uses updated code)
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
+        run: |
+          git fetch --tags --force
+          git checkout -f "tags/$TAG"
+          git rev-parse HEAD
+
+      - name: Set up QEMU
+        if: inputs.enableQemu
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -85,7 +220,6 @@ jobs:
           flavor: |
             latest=false
 
-      # Generate the tags for the additional target based on the primary tags
       - name: Generate Additional Target Tags
         if: inputs.additionalTarget != ''
         id: target_tags
@@ -117,7 +251,7 @@ jobs:
           echo "Generated additional target tags: ${TARGET_TAGS}"
 
       - name: Build and push default stage
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ inputs.dockerfilePath }}
@@ -125,12 +259,13 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.buildArgs }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Build and push additional target
         if: inputs.additionalTarget != ''
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ inputs.dockerfilePath }}
@@ -139,5 +274,7 @@ jobs:
           pull: true
           tags: ${{ steps.target_tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.buildArgs }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
