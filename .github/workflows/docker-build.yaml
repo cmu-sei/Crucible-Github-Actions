@@ -46,7 +46,16 @@ on:
         description: "Optional shell commands to run before docker build (e.g. fetch artifacts)"
         type: string
         required: false
-
+      gitUserName:
+        description: "Git username for commits."
+        type: string
+        required: false
+        default: "github-actions[bot]"
+      gitUserEmail:
+        description: "Git user email for commits."
+        type: string
+        required: false
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -59,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -119,6 +128,7 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Update app version files
+        id: update_versions
         if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
         run: |
           echo "Updating version to: $VERSION"
@@ -150,31 +160,33 @@ jobs:
             exit 1
           fi
 
-          git diff
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No version file changes detected."
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Version file changes detected:"
+            git diff
+          fi
 
       - name: Commit version bump
-        if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if git diff --quiet; then
-            echo "No version change needed."
-            exit 0
-          fi
+          git config user.name "${{ inputs.gitUserName }}"
+          git config user.email "${{ inputs.gitUserEmail }}"
 
           mapfile -t FILES <<< "${{ inputs.versionFiles }}"
           git add "${FILES[@]}"
           git commit -m "chore: set version to $VERSION"
 
       - name: Force-move tag to include version bump commit
-        if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
         run: |
           git tag -f "$TAG"
           git push origin -f "refs/tags/$TAG"
 
       - name: Re-checkout moved tag (so build uses updated code)
-        if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
+        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
         run: |
           git fetch --tags --force
           git checkout -f "tags/$TAG"
@@ -239,7 +251,7 @@ jobs:
           echo "Generated additional target tags: ${TARGET_TAGS}"
 
       - name: Build and push default stage
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ inputs.dockerfilePath }}
@@ -253,7 +265,7 @@ jobs:
 
       - name: Build and push additional target
         if: inputs.additionalTarget != ''
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ inputs.dockerfilePath }}
