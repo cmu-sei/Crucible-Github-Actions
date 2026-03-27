@@ -123,7 +123,12 @@ The action checks out the current branch, runs `header.py` to add missing header
 | `tagName` |  | Explicit tag override. When omitted, tags are inferred from semver, branches, or tags. |
 | `dockerfilePath` |  | Path to the Dockerfile (`./Dockerfile` by default). |
 | `additionalTarget` |  | Optional extra build stage to publish (tags will be suffixed with `-<target>`). |
-| `push` |  | Set to `false` to force a build-only run even outside PRs. Defaults to `true` on non‑PR events. |
+| `push` |  | Set to `false` to force a build-only run even outside PRs. Defaults to `true` on non-PR events. |
+| `versionMode` |  | How to inject version at build time: `none` (default), `npm`, or `csproj`. |
+| `versionFiles` |  | Newline-separated file paths to update (used by `npm` mode to set version in `package.json` files before build). |
+| `buildArgs` |  | Optional Docker build args (newline-separated `key=value`). |
+| `enableQemu` |  | Set to `true` to enable QEMU for multi-arch builds. Defaults to `false`. |
+| `preBuildCommands` |  | Optional shell commands to run before the Docker build (e.g., fetch artifacts). |
 
 #### Required Secrets
 
