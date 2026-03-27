@@ -25,12 +25,12 @@ on:
         type: string
         required: false
       versionMode:
-        description: "none | npm | csproj"
+        description: "How to inject version at build time: none | npm | csproj"
         type: string
         required: false
         default: "none"
       versionFiles:
-        description: "Newline-separated file paths to update"
+        description: "Newline-separated file paths to update (used by npm mode to set version in package.json files before build)"
         type: string
         required: false
       buildArgs:
@@ -46,16 +46,6 @@ on:
         description: "Optional shell commands to run before docker build (e.g. fetch artifacts)"
         type: string
         required: false
-      gitUserName:
-        description: "Git username for commits."
-        type: string
-        required: false
-        default: "github-actions[bot]"
-      gitUserEmail:
-        description: "Git user email for commits."
-        type: string
-        required: false
-        default: "41898282+github-actions[bot]@users.noreply.github.com"
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -69,8 +59,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
       - name: Determine Push Condition
         id: push_condition
@@ -106,8 +94,8 @@ jobs:
       - name: Determine version from tag
         id: version
         run: |
-          if [[ -n "${{ inputs.tagName }}" ]]; then
-            TAG="${{ inputs.tagName }}"
+          if [[ -n "$INPUT_TAG_NAME" ]]; then
+            TAG="$INPUT_TAG_NAME"
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
@@ -121,81 +109,44 @@ jobs:
             exit 0
           fi
 
+          # Strip leading 'v' to get numeric semver only
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "TAG=$TAG" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tagName }}
 
-      - name: Update app version files
-        id: update_versions
-        if: steps.push_condition.outputs.push == 'true' && steps.version.outputs.tag != '' && inputs.versionMode != 'none' && inputs.versionFiles != ''
+      - name: Inject version into package.json files (npm)
+        if: inputs.versionMode == 'npm' && steps.version.outputs.version != '' && inputs.versionFiles != ''
         run: |
-          echo "Updating version to: $VERSION"
-          mapfile -t FILES <<< "${{ inputs.versionFiles }}"
-
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Setting npm version to: $VERSION"
+          mapfile -t FILES <<< "$INPUT_VERSION_FILES"
           for f in "${FILES[@]}"; do
             if [[ ! -f "$f" ]]; then
-              echo "Version file not found: $f"
+              echo "::error::Version file not found: $f"
               exit 1
             fi
+            dir=$(dirname "$f")
+            pushd "$dir" > /dev/null
+            npm version "$VERSION" --no-git-tag-version --allow-same-version
+            popd > /dev/null
+            echo "Updated $f to version $VERSION"
           done
+        env:
+          INPUT_VERSION_FILES: ${{ inputs.versionFiles }}
 
-          if [[ "${{ inputs.versionMode }}" == "npm" ]]; then
-            for f in "${FILES[@]}"; do
-              node -e "
-                const fs = require('fs');
-                const p = '$f';
-                const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
-                pkg.version = process.env.VERSION;
-                fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
-              "
-            done
-          elif [[ "${{ inputs.versionMode }}" == "csproj" ]]; then
-            for f in "${FILES[@]}"; do
-              perl -0777 -i -pe "s|<Version>.*?</Version>|<Version>$VERSION</Version>|g" "$f"
-            done
-          else
-            echo "Unknown versionMode: ${{ inputs.versionMode }}"
-            exit 1
-          fi
-
-          if git diff --quiet; then
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "No version file changes detected."
-          else
-            echo "has_changes=true" >> "$GITHUB_OUTPUT"
-            echo "Version file changes detected:"
-            git diff
-          fi
-
-      - name: Commit version bump
-        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
+      - name: Prepare build args for .NET version (csproj)
+        id: version_build_args
+        if: inputs.versionMode == 'csproj' && steps.version.outputs.version != ''
         run: |
-          git config user.name "${{ inputs.gitUserName }}"
-          git config user.email "${{ inputs.gitUserEmail }}"
-
-          mapfile -t FILES <<< "${{ inputs.versionFiles }}"
-          git add "${FILES[@]}"
-          git commit -m "chore: set version to $VERSION"
-
-      - name: Push version bump commit to main branch
-        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
-        run: |
-          git push origin HEAD:main
-
-      - name: Force-move tag to include version bump commit
-        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
-        run: |
-          git tag -f "$TAG"
-          git push origin -f "refs/tags/$TAG"
-
-      - name: Re-checkout moved tag (so build uses updated code)
-        if: steps.push_condition.outputs.push == 'true' && steps.update_versions.conclusion == 'success' && steps.update_versions.outputs.has_changes == 'true'
-        run: |
-          git fetch --tags --force
-          git checkout -f "tags/$TAG"
-          git rev-parse HEAD
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "Injecting .NET version as build args: $VERSION"
+          {
+            echo "args<<EOF"
+            echo "VERSION=$VERSION"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         if: inputs.enableQemu
@@ -230,7 +181,7 @@ jobs:
         id: target_tags
         run: |
           TARGET_TAGS=""
-          readarray -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          mapfile -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
 
           for full_tag in "${TAG_ARRAY[@]}"; do
             # Extract just the tag part after the colon
@@ -246,7 +197,7 @@ jobs:
 
             new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
 
-            if [[ ! -z "$TARGET_TAGS" ]]; then
+            if [[ -n "$TARGET_TAGS" ]]; then
               TARGET_TAGS="${TARGET_TAGS},"
             fi
             TARGET_TAGS="${TARGET_TAGS}${new_tag}"
@@ -254,6 +205,23 @@ jobs:
 
           echo "tags=${TARGET_TAGS}" >> $GITHUB_OUTPUT
           echo "Generated additional target tags: ${TARGET_TAGS}"
+
+      - name: Combine build args
+        id: combined_build_args
+        run: |
+          {
+            echo "args<<EOF"
+            if [[ -n "$USER_ARGS" ]]; then
+              echo "$USER_ARGS"
+            fi
+            if [[ -n "$VERSION_ARGS" ]]; then
+              echo "$VERSION_ARGS"
+            fi
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+        env:
+          USER_ARGS: ${{ inputs.buildArgs }}
+          VERSION_ARGS: ${{ steps.version_build_args.outputs.args }}
 
       - name: Build and push default stage
         uses: docker/build-push-action@v6
@@ -264,7 +232,7 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ inputs.buildArgs }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -279,7 +247,7 @@ jobs:
           pull: true
           tags: ${{ steps.target_tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ inputs.buildArgs }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
