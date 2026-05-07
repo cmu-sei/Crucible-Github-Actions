@@ -248,6 +248,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
+      - name: Docker Meta (labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.imageName }}
+          tags: |
+
       - name: Build (push by digest) default stage
         id: build_default_push
         if: needs.prepare.outputs.push == 'true'
@@ -259,6 +266,7 @@ jobs:
           pull: true
           push: true
           outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha,scope=${{ matrix.safe }}-default
           cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
@@ -272,6 +280,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           pull: true
           push: false
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha,scope=${{ matrix.safe }}-default
           cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
@@ -309,6 +318,7 @@ jobs:
           pull: true
           push: true
           outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha,scope=${{ matrix.safe }}-additional
           cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
@@ -323,6 +333,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           pull: true
           push: false
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
           cache-from: type=gha,scope=${{ matrix.safe }}-additional
           cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
