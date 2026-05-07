@@ -1,3 +1,15 @@
+# Reusable multi-arch Docker build & publish workflow.
+#
+# Pipeline shape: prepare -> build (matrix, one job per platform) -> merge.
+# Each platform builds on its native GitHub-hosted runner (amd64 on
+# ubuntu-24.04, arm64 on ubuntu-24.04-arm) in parallel.
+#
+# Push path: each build job pushes by digest only (no tags); the merge
+# job then assembles a multi-arch manifest list over those digests with
+# `docker buildx imagetools create` and applies the final tag set.
+# No-push path (PRs, explicit push=false): builds run for validation
+# only and merge is skipped entirely.
+
 name: Build & Publish Image
 
 on:
@@ -105,6 +117,9 @@ jobs:
         env:
           INPUT_ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
 
+      # Emits a JSON matrix mapping each requested platform to its native
+      # runner label. Centralizing the mapping here is the only place to
+      # update if GitHub renames a runner label.
       - name: Build matrix from platforms input
         id: matrix
         run: |
@@ -141,6 +156,9 @@ jobs:
         env:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
 
+  # One matrix job per platform, each on its native runner. fail-fast is
+  # disabled so a flake on one arch doesn't cancel the other -- the merge
+  # job still requires all platforms to succeed before running.
   build:
     name: Build ${{ matrix.platform }}
     needs: prepare
@@ -248,6 +266,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
+      # OCI labels (org.opencontainers.image.*) must be baked into the
+      # image config at build time -- `imagetools create` in the merge
+      # job writes manifest lists and cannot add config-level labels
+      # after the fact. Tag rules are intentionally empty here; the
+      # merge job owns tag generation. We only need the `labels` output.
       - name: Docker Meta (labels)
         id: meta
         uses: docker/metadata-action@v6
@@ -255,6 +278,9 @@ jobs:
           images: ${{ inputs.imageName }}
           tags: |
 
+      # Push-by-digest: upload the image content but do not apply any
+      # tags yet. The merge job collects digests from every platform
+      # and creates the final multi-arch tagged manifest list.
       - name: Build (push by digest) default stage
         id: build_default_push
         if: needs.prepare.outputs.push == 'true'
@@ -285,6 +311,9 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.safe }}-default
           cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
 
+      # Write the digest as an empty file whose *name* is the sha256.
+      # The merge job doesn't need the contents -- just the list of
+      # digests, which it recovers from the filenames after download.
       - name: Export default digest
         if: needs.prepare.outputs.push == 'true'
         run: |
@@ -297,6 +326,9 @@ jobs:
           fi
           touch "/tmp/digests/default/${digest#sha256:}"
 
+      # Per-platform artifact name (digests-default-linux-amd64, etc.)
+      # so the merge job can download all platforms' digests together
+      # via the `digests-default-*` pattern.
       - name: Upload default digest
         if: needs.prepare.outputs.push == 'true'
         uses: actions/upload-artifact@v4
@@ -359,6 +391,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Assembles the final multi-arch manifest list from the per-platform
+  # digests pushed by the build matrix, then applies the generated tag
+  # set. Skipped entirely when not pushing (PRs, push=false).
   merge:
     name: Merge manifests
     needs: [prepare, build]
@@ -389,6 +424,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
+      # Source of truth for tag generation. The `build` job also runs
+      # metadata-action but only consumes the `labels` output; all tag
+      # rules live here so there's one place to change them.
       - name: Docker Meta for primary image
         id: meta
         uses: docker/metadata-action@v6
@@ -403,6 +441,10 @@ jobs:
           flavor: |
             latest=false
 
+      # Derive the additional-target tag set from the primary tags by
+      # appending `-<additionalTarget>` to each tag (e.g. `1.2.3` ->
+      # `1.2.3-migrations`). Newline-separated to match the primary
+      # tags output format.
       - name: Generate additional target tags
         if: needs.prepare.outputs.has_additional_target == 'true'
         id: target_tags
@@ -428,6 +470,10 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # `imagetools create` assembles a manifest list referencing each
+      # per-platform digest that the build matrix pushed, then tags the
+      # result. The filenames in /tmp/digests/default are bare sha256
+      # hashes (see build job's Export step).
       - name: Create primary manifest list
         working-directory: /tmp/digests/default
         run: |
