@@ -1,3 +1,15 @@
+# Reusable multi-arch Docker build & publish workflow.
+#
+# Pipeline shape: prepare -> build (matrix, one job per platform) -> merge.
+# Each platform builds on its native GitHub-hosted runner (amd64 on
+# ubuntu-24.04, arm64 on ubuntu-24.04-arm) in parallel.
+#
+# Push path: each build job pushes by digest only (no tags); the merge
+# job then assembles a multi-arch manifest list over those digests with
+# `docker buildx imagetools create` and applies the final tag set.
+# No-push path (PRs, explicit push=false): builds run for validation
+# only and merge is skipped entirely.
+
 name: Build & Publish Image
 
 on:
@@ -54,46 +66,122 @@ on:
         required: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  prepare:
+    name: Prepare build matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      push: ${{ steps.push_condition.outputs.push }}
+      needs_merge: ${{ steps.push_condition.outputs.needs_merge }}
+      has_additional_target: ${{ steps.flags.outputs.has_additional_target }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Determine Push Condition
+      - name: Determine push condition
         id: push_condition
-        # Push unless the calling workflow was triggered by a pull_request, or the push input was set
         run: |
+          set -euo pipefail
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "Workflow triggered by pull_request. Will not push."
             PUSH=false
           else
-            echo "Not a pull request"
-            if [ -n "$INPUT_PUSH" ]; then
-              echo "Push override input detected: '$INPUT_PUSH'. Setting push to: $INPUT_PUSH"
-              PUSH=$INPUT_PUSH
+            if [[ -n "$INPUT_PUSH" ]]; then
+              echo "Push override input detected: '$INPUT_PUSH'."
+              PUSH="$INPUT_PUSH"
             else
               echo "No push override. Will push by default."
               PUSH=true
             fi
           fi
 
+          if [[ "$PUSH" == "true" ]]; then
+            NEEDS_MERGE=true
+          else
+            NEEDS_MERGE=false
+          fi
+
           echo "Final push decision: $PUSH"
-          echo "push=$PUSH" >> $GITHUB_OUTPUT
+          echo "Final needs_merge: $NEEDS_MERGE"
+          echo "push=$PUSH" >> "$GITHUB_OUTPUT"
+          echo "needs_merge=$NEEDS_MERGE" >> "$GITHUB_OUTPUT"
         env:
           INPUT_PUSH: ${{ inputs.push }}
 
+      - name: Compute flags
+        id: flags
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_ADDITIONAL_TARGET" ]]; then
+            echo "has_additional_target=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_additional_target=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          INPUT_ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
+
+      # Emits a JSON matrix mapping each requested platform to its native
+      # runner label. Centralizing the mapping here is the only place to
+      # update if GitHub renames a runner label.
+      - name: Build matrix from platforms input
+        id: matrix
+        run: |
+          set -euo pipefail
+
+          declare -A RUNNER_FOR
+          RUNNER_FOR["linux/amd64"]="ubuntu-24.04"
+          RUNNER_FOR["linux/arm64"]="ubuntu-24.04-arm"
+
+          IFS=',' read -r -a PLATFORMS <<< "$INPUT_PLATFORMS"
+
+          ENTRIES="[]"
+          for raw in "${PLATFORMS[@]}"; do
+            p="${raw//[[:space:]]/}"
+            [[ -z "$p" ]] && continue
+            if [[ -z "${RUNNER_FOR[$p]:-}" ]]; then
+              echo "::error::Unsupported platform '$p'. Supported: ${!RUNNER_FOR[*]}"
+              exit 1
+            fi
+            runner="${RUNNER_FOR[$p]}"
+            safe="$(echo "$p" | tr '/' '-')"
+            ENTRIES="$(jq -c --arg p "$p" --arg r "$runner" --arg s "$safe" \
+              '. + [{platform:$p, runner:$r, safe:$s}]' <<< "$ENTRIES")"
+          done
+
+          if [[ "$ENTRIES" == "[]" ]]; then
+            echo "::error::No valid platforms derived from input '$INPUT_PLATFORMS'"
+            exit 1
+          fi
+
+          MATRIX="$(jq -c --argjson include "$ENTRIES" -n '{include:$include}')"
+          echo "Derived matrix: $MATRIX"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+
+  # One matrix job per platform, each on its native runner. fail-fast is
+  # disabled so a flake on one arch doesn't cancel the other -- the merge
+  # job still requires all platforms to succeed before running.
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Pre-build commands
-        if: steps.push_condition.outputs.push == 'true' && inputs.preBuildCommands != ''
+        if: inputs.preBuildCommands != ''
         shell: bash
         run: |
           set -euo pipefail
-          echo "Running pre-build commands..."
+          echo "Running pre-build commands on ${{ matrix.platform }}..."
           ${{ inputs.preBuildCommands }}
 
       - name: Determine version from tag
         id: version
         run: |
+          set -euo pipefail
           if [[ -n "$INPUT_TAG_NAME" ]]; then
             TAG="$INPUT_TAG_NAME"
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
@@ -104,25 +192,26 @@ jobs:
 
           if [[ -z "$TAG" ]]; then
             echo "No tag found; skipping version handling."
-            echo "tag=" >> $GITHUB_OUTPUT
-            echo "version=" >> $GITHUB_OUTPUT
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Strip leading 'v' to get numeric semver only
           VERSION="${TAG#v}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         env:
           INPUT_TAG_NAME: ${{ inputs.tagName }}
 
       - name: Inject version into package.json files (npm)
         if: inputs.versionMode == 'npm' && steps.version.outputs.version != '' && inputs.versionFiles != ''
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           echo "Setting npm version to: $VERSION"
           mapfile -t FILES <<< "$INPUT_VERSION_FILES"
           for f in "${FILES[@]}"; do
+            [[ -z "$f" ]] && continue
             if [[ ! -f "$f" ]]; then
               echo "::error::Version file not found: $f"
               exit 1
@@ -140,28 +229,204 @@ jobs:
         id: version_build_args
         if: inputs.versionMode == 'csproj' && steps.version.outputs.version != ''
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           echo "Injecting .NET version as build args: $VERSION"
           {
             echo "args<<EOF"
             echo "VERSION=$VERSION"
             echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        if: contains(inputs.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v4
+      - name: Combine build args
+        id: combined_build_args
+        run: |
+          set -euo pipefail
+          {
+            echo "args<<EOF"
+            if [[ -n "$USER_ARGS" ]]; then
+              echo "$USER_ARGS"
+            fi
+            if [[ -n "$VERSION_ARGS" ]]; then
+              echo "$VERSION_ARGS"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          USER_ARGS: ${{ inputs.buildArgs }}
+          VERSION_ARGS: ${{ steps.version_build_args.outputs.args }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Login to Docker Hub
-        if: steps.push_condition.outputs.push == 'true'
+        if: needs.prepare.outputs.push == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
+      # OCI labels (org.opencontainers.image.*) must be baked into the
+      # image config at build time -- `imagetools create` in the merge
+      # job writes manifest lists and cannot add config-level labels
+      # after the fact. Tag rules are intentionally empty here; the
+      # merge job owns tag generation. We only need the `labels` output.
+      - name: Docker Meta (labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.imageName }}
+          tags: |
+
+      # Push-by-digest: upload the image content but do not apply any
+      # tags yet. The merge job collects digests from every platform
+      # and creates the final multi-arch tagged manifest list.
+      - name: Build (push by digest) default stage
+        id: build_default_push
+        if: needs.prepare.outputs.push == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          push: true
+          outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.safe }}-default
+          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
+
+      - name: Build (no push) default stage
+        if: needs.prepare.outputs.push != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          push: false
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.safe }}-default
+          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
+
+      # Write the digest as an empty file whose *name* is the sha256.
+      # The merge job doesn't need the contents -- just the list of
+      # digests, which it recovers from the filenames after download.
+      - name: Export default digest
+        if: needs.prepare.outputs.push == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests/default
+          digest="${{ steps.build_default_push.outputs.digest }}"
+          if [[ -z "$digest" ]]; then
+            echo "::error::No digest produced for default stage on ${{ matrix.platform }}"
+            exit 1
+          fi
+          touch "/tmp/digests/default/${digest#sha256:}"
+
+      # Per-platform artifact name (digests-default-linux-amd64, etc.)
+      # so the merge job can download all platforms' digests together
+      # via the `digests-default-*` pattern.
+      - name: Upload default digest
+        if: needs.prepare.outputs.push == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-default-${{ matrix.safe }}
+          path: /tmp/digests/default/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Build (push by digest) additional target
+        id: build_additional_push
+        if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          target: ${{ inputs.additionalTarget }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          push: true
+          outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.safe }}-additional
+          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
+
+      - name: Build (no push) additional target
+        if: needs.prepare.outputs.push != 'true' && needs.prepare.outputs.has_additional_target == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          target: ${{ inputs.additionalTarget }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          push: false
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ matrix.safe }}-additional
+          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
+
+      - name: Export additional digest
+        if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests/additional
+          digest="${{ steps.build_additional_push.outputs.digest }}"
+          if [[ -z "$digest" ]]; then
+            echo "::error::No digest produced for additional target on ${{ matrix.platform }}"
+            exit 1
+          fi
+          touch "/tmp/digests/additional/${digest#sha256:}"
+
+      - name: Upload additional digest
+        if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-additional-${{ matrix.safe }}
+          path: /tmp/digests/additional/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assembles the final multi-arch manifest list from the per-platform
+  # digests pushed by the build matrix, then applies the generated tag
+  # set. Skipped entirely when not pushing (PRs, push=false).
+  merge:
+    name: Merge manifests
+    needs: [prepare, build]
+    if: needs.prepare.outputs.needs_merge == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download default digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests/default
+          pattern: digests-default-*
+          merge-multiple: true
+
+      - name: Download additional digests
+        if: needs.prepare.outputs.has_additional_target == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests/additional
+          pattern: digests-additional-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      # Source of truth for tag generation. The `build` job also runs
+      # metadata-action but only consumes the `labels` output; all tag
+      # rules live here so there's one place to change them.
       - name: Docker Meta for primary image
         id: meta
         uses: docker/metadata-action@v6
@@ -176,79 +441,99 @@ jobs:
           flavor: |
             latest=false
 
-      - name: Generate Additional Target Tags
-        if: inputs.additionalTarget != ''
+      # Derive the additional-target tag set from the primary tags by
+      # appending `-<additionalTarget>` to each tag (e.g. `1.2.3` ->
+      # `1.2.3-migrations`). Newline-separated to match the primary
+      # tags output format.
+      - name: Generate additional target tags
+        if: needs.prepare.outputs.has_additional_target == 'true'
         id: target_tags
         run: |
+          set -euo pipefail
           TARGET_TAGS=""
           mapfile -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
 
           for full_tag in "${TAG_ARRAY[@]}"; do
-            # Extract just the tag part after the colon
             tag_part="${full_tag##*:}"
-            # Get the base image name
             image_name="${full_tag%%:*}"
-
-            # Skip if tag_part is empty
-            if [[ -z "$tag_part" ]]; then
-              echo "Skipping tag with empty tag_part for: $full_tag"
-              continue
-            fi
-
+            [[ -z "$tag_part" ]] && continue
             new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
-
             if [[ -n "$TARGET_TAGS" ]]; then
-              TARGET_TAGS="${TARGET_TAGS},"
+              TARGET_TAGS="${TARGET_TAGS}"$'\n'
             fi
             TARGET_TAGS="${TARGET_TAGS}${new_tag}"
           done
 
-          echo "tags=${TARGET_TAGS}" >> $GITHUB_OUTPUT
-          echo "Generated additional target tags: ${TARGET_TAGS}"
-
-      - name: Combine build args
-        id: combined_build_args
-        run: |
           {
-            echo "args<<EOF"
-            if [[ -n "$USER_ARGS" ]]; then
-              echo "$USER_ARGS"
-            fi
-            if [[ -n "$VERSION_ARGS" ]]; then
-              echo "$VERSION_ARGS"
-            fi
+            echo "tags<<EOF"
+            echo "${TARGET_TAGS}"
             echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
+
+      # `imagetools create` assembles a manifest list referencing each
+      # per-platform digest that the build matrix pushed, then tags the
+      # result. The filenames in /tmp/digests/default are bare sha256
+      # hashes (see build job's Export step).
+      - name: Create primary manifest list
+        working-directory: /tmp/digests/default
+        run: |
+          set -euo pipefail
+          TAG_ARGS=()
+          while IFS= read -r t; do
+            [[ -z "$t" ]] && continue
+            TAG_ARGS+=("-t" "$t")
+          done <<< "${{ steps.meta.outputs.tags }}"
+
+          SRC_ARGS=()
+          for f in *; do
+            [[ -e "$f" ]] || continue
+            SRC_ARGS+=("${{ inputs.imageName }}@sha256:${f}")
+          done
+
+          if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
+            echo "::error::No digests found in /tmp/digests/default"
+            exit 1
+          fi
+
+          docker buildx imagetools create "${TAG_ARGS[@]}" "${SRC_ARGS[@]}"
+
+      - name: Inspect primary manifest
         env:
-          USER_ARGS: ${{ inputs.buildArgs }}
-          VERSION_ARGS: ${{ steps.version_build_args.outputs.args }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          FIRST_TAG="$(head -n1 <<< "$TAGS")"
+          docker buildx imagetools inspect "$FIRST_TAG"
 
-      - name: Build and push default stage
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ inputs.dockerfilePath }}
-          platforms: ${{ inputs.platforms }}
-          push: ${{ steps.push_condition.outputs.push }}
-          pull: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create additional target manifest list
+        if: needs.prepare.outputs.has_additional_target == 'true'
+        working-directory: /tmp/digests/additional
+        run: |
+          set -euo pipefail
+          TAG_ARGS=()
+          while IFS= read -r t; do
+            [[ -z "$t" ]] && continue
+            TAG_ARGS+=("-t" "$t")
+          done <<< "${{ steps.target_tags.outputs.tags }}"
 
-      - name: Build and push additional target
-        if: inputs.additionalTarget != ''
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ inputs.dockerfilePath }}
-          target: ${{ inputs.additionalTarget }}
-          platforms: ${{ inputs.platforms }}
-          push: ${{ steps.push_condition.outputs.push }}
-          pull: true
-          tags: ${{ steps.target_tags.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          SRC_ARGS=()
+          for f in *; do
+            [[ -e "$f" ]] || continue
+            SRC_ARGS+=("${{ inputs.imageName }}@sha256:${f}")
+          done
+
+          if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
+            echo "::error::No digests found in /tmp/digests/additional"
+            exit 1
+          fi
+
+          docker buildx imagetools create "${TAG_ARGS[@]}" "${SRC_ARGS[@]}"
+
+      - name: Inspect additional manifest
+        if: needs.prepare.outputs.has_additional_target == 'true'
+        env:
+          TAGS: ${{ steps.target_tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          FIRST_TAG="$(head -n1 <<< "$TAGS")"
+          docker buildx imagetools inspect "$FIRST_TAG"
