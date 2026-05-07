@@ -118,7 +118,7 @@ jobs:
 
           ENTRIES="[]"
           for raw in "${PLATFORMS[@]}"; do
-            p="$(echo "$raw" | xargs)"
+            p="${raw//[[:space:]]/}"
             [[ -z "$p" ]] && continue
             if [[ -z "${RUNNER_FOR[$p]:-}" ]]; then
               echo "::error::Unsupported platform '$p'. Supported: ${!RUNNER_FOR[*]}"
@@ -452,9 +452,11 @@ jobs:
           docker buildx imagetools create "${TAG_ARGS[@]}" "${SRC_ARGS[@]}"
 
       - name: Inspect primary manifest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
-          FIRST_TAG="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          FIRST_TAG="$(head -n1 <<< "$TAGS")"
           docker buildx imagetools inspect "$FIRST_TAG"
 
       - name: Create additional target manifest list
@@ -483,7 +485,9 @@ jobs:
 
       - name: Inspect additional manifest
         if: needs.prepare.outputs.has_additional_target == 'true'
+        env:
+          TAGS: ${{ steps.target_tags.outputs.tags }}
         run: |
           set -euo pipefail
-          FIRST_TAG="$(echo '${{ steps.target_tags.outputs.tags }}' | head -n1)"
+          FIRST_TAG="$(head -n1 <<< "$TAGS")"
           docker buildx imagetools inspect "$FIRST_TAG"
