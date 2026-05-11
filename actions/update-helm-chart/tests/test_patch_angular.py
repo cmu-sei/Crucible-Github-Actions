@@ -117,3 +117,55 @@ def test_operates_under_subkey_in_parent_values():
     )
     assert changed is True
     assert json.loads(data["player-ui"]["settings"]) == {"A": False}
+
+
+def test_settings_yaml_splice_scoped_to_target_subkey():
+    src = textwrap.dedent(
+        """\
+        player-api:
+          env:
+            Existing__Key: ""
+        player-ui:
+          settingsYaml: {}
+        """
+    )
+    data = _roundtrip(src)
+    changed = patch_values(
+        data,
+        subkey="player-api",
+        added={"/OIDCSettings/authority": LeafType.STRING},
+        removed=[],
+    )
+    # player-api has no settings/settingsYaml block, so no change should occur
+    # and the player-ui settingsYaml must NOT be spliced into.
+    assert changed is False
+    out = _dump(data)
+    assert "OIDCSettings" not in out
+    assert "authority" not in out
+
+
+def test_settings_yaml_splice_targets_correct_sibling_block():
+    src = textwrap.dedent(
+        """\
+        player-api:
+          settingsYaml: {}
+        player-ui:
+          settingsYaml: {}
+        """
+    )
+    data = _roundtrip(src)
+    changed = patch_values(
+        data,
+        subkey="player-ui",
+        added={"/OIDCSettings/authority": LeafType.STRING},
+        removed=[],
+    )
+    assert changed is True
+    out = _dump(data)
+    # The splice must land under player-ui, not under player-api.
+    api_idx = out.index("player-api:")
+    ui_idx = out.index("player-ui:")
+    oidc_idx = out.index("# OIDCSettings:")
+    assert ui_idx < oidc_idx
+    # And the player-api block (between api_idx and ui_idx) must not contain it.
+    assert "OIDCSettings" not in out[api_idx:ui_idx]

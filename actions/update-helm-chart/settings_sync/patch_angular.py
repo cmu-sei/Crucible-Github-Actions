@@ -207,13 +207,14 @@ def _splice_settings_yaml(
     lines = text.split("\n")
 
     # Locate the `settingsYaml:` line. When subkey is given, only consider
-    # indented occurrences (child of the subkey).
+    # occurrences inside the subkey's block (between the subkey line and the
+    # next top-level key) to avoid matching a sibling subkey's settingsYaml.
     target_indent: Optional[int] = None
+    search_start = 0
+    search_end = len(lines)
     if subkey is None:
         target_indent = 0
     else:
-        # Find `<subkey>:` at column 0, then look for settingsYaml nested
-        # under it at a deeper indent.
         subkey_line = None
         for idx, line in enumerate(lines):
             if line == f"{subkey}:" or line.startswith(f"{subkey}:"):
@@ -226,11 +227,23 @@ def _splice_settings_yaml(
             if line.strip():
                 target_indent = len(line) - len(line.lstrip(" "))
                 break
+        # Bound search to the subkey's block: stop at the next line that
+        # starts in column 0 with a non-space character (a sibling top-level
+        # key or list item).
+        search_start = subkey_line + 1
+        search_end = len(lines)
+        for idx in range(search_start, len(lines)):
+            line = lines[idx]
+            if line and not line[0].isspace():
+                search_end = idx
+                break
 
     if target_indent is None:
         return text
 
-    key_line_idx = _find_settings_yaml_line(lines, target_indent)
+    key_line_idx = _find_settings_yaml_line(
+        lines, target_indent, search_start, search_end
+    )
     if key_line_idx is None:
         return text
 
@@ -258,9 +271,16 @@ def _splice_settings_yaml(
     return "\n".join(new_lines)
 
 
-def _find_settings_yaml_line(lines: list[str], indent: int) -> Optional[int]:
+def _find_settings_yaml_line(
+    lines: list[str],
+    indent: int,
+    start: int = 0,
+    end: Optional[int] = None,
+) -> Optional[int]:
     prefix = " " * indent + "settingsYaml:"
-    for idx, line in enumerate(lines):
+    stop = len(lines) if end is None else end
+    for idx in range(start, stop):
+        line = lines[idx]
         if line == prefix or line.startswith(prefix + " ") or line == prefix.rstrip():
             return idx
     return None
