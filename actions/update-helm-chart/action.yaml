@@ -41,6 +41,14 @@ inputs:
     description: "Git user email for commits."
     required: false
     default: "41898282+github-actions[bot]@users.noreply.github.com"
+  settings_file:
+    description: "Path in the calling repo to the app settings file (e.g. Player.Api/appsettings.json). When set, enables the settings-sync phase."
+    required: false
+    default: ""
+  settings_file_kind:
+    description: "Strategy for parsing settings_file. One of: dotnet-appsettings, angular-settings. Required when settings_file is set."
+    required: false
+    default: ""
 outputs:
   new_app_version:
     description: "Normalized application version extracted from the release tag."
@@ -63,6 +71,18 @@ outputs:
   has_changes:
     description: "True when any chart files were updated."
     value: ${{ steps.update.outputs.has_changes }}
+  settings_changed:
+    description: "True when settings were added or removed between the previous release tag and this one."
+    value: ${{ steps.update.outputs.settings_changed }}
+  settings_added:
+    description: "JSON object mapping added flattened setting keys to their leaf type."
+    value: ${{ steps.update.outputs.settings_added }}
+  settings_removed:
+    description: "JSON array of removed flattened setting keys."
+    value: ${{ steps.update.outputs.settings_removed }}
+  previous_release_tag:
+    description: "Resolved previous release tag (empty when no prior tag exists)."
+    value: ${{ steps.update.outputs.previous_release_tag }}
 
 runs:
   using: "composite"
@@ -110,11 +130,13 @@ runs:
     - name: Install Python dependencies
       run: |
         python3 -m pip install --upgrade pip
-        python3 -m pip install pyyaml
+        python3 -m pip install pyyaml "ruamel.yaml>=0.18,<1"
       shell: bash
 
     - name: Update Helm chart metadata
       id: update
+      env:
+        SOURCE_REPO: ${{ github.repository }}
       run: |
         python3 "${{ github.action_path }}/update_helm_chart.py" \
           --helm-repo-dir "helm-charts" \
@@ -122,8 +144,20 @@ runs:
           --parent-chart-file "${{ inputs.parent_chart_file }}" \
           --release-tag "${{ inputs.release_tag }}" \
           --app-name "${{ inputs.app_name }}" \
-          --github-output "$GITHUB_OUTPUT"
+          --github-output "$GITHUB_OUTPUT" \
+          --settings-file "${{ inputs.settings_file }}" \
+          --settings-file-kind "${{ inputs.settings_file_kind }}" \
+          --source-repo "$SOURCE_REPO" \
+          --app-repo-dir "$GITHUB_WORKSPACE"
       shell: bash
+
+    - name: Derive README path
+      if: inputs.parent_chart_file != ''
+      id: readme
+      shell: bash
+      env:
+        PCF: ${{ inputs.parent_chart_file }}
+      run: echo "path=$(dirname "$PCF")/README.md" >> "$GITHUB_OUTPUT"
 
     - name: Create feature branch
       if: steps.update.outputs.has_changes == 'true'
@@ -160,8 +194,25 @@ runs:
         APP_NAME: ${{ inputs.app_name }}
         APP_VERSION: ${{ steps.update.outputs.new_app_version }}
         RELEASE_TYPE: ${{ steps.update.outputs.release_type }}
+        SOURCE_REPO: ${{ github.repository }}
+        SETTINGS_CHANGED: ${{ steps.update.outputs.settings_changed }}
+        SETTINGS_ADDED: ${{ steps.update.outputs.settings_added }}
+        SETTINGS_REMOVED: ${{ steps.update.outputs.settings_removed }}
+        README_PATH: ${{ steps.readme.outputs.path }}
       run: |
-        PR_BODY="Automated update for ${APP_NAME} to version ${APP_VERSION}."
+        RELEASE_URL="https://github.com/${SOURCE_REPO}/releases/tag/${APP_VERSION}"
+        PR_BODY="Automated update for ${APP_NAME} to version [${APP_VERSION}](${RELEASE_URL})."
+        if [ "${SETTINGS_CHANGED}" = "true" ]; then
+          SECTION=$(python3 "${{ github.action_path }}/render_pr_section.py" \
+            --source-repo "${SOURCE_REPO}" \
+            --release-tag "${APP_VERSION}" \
+            --readme-path "${README_PATH}" \
+            --added "${SETTINGS_ADDED:-{\}}" \
+            --removed "${SETTINGS_REMOVED:-[]}")
+          if [ -n "$SECTION" ]; then
+            PR_BODY=$(printf '%s\n\n%s\n' "${PR_BODY}" "${SECTION}")
+          fi
+        fi
         if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
           echo "Pull request already exists for branch ${BRANCH}. Skipping creation."
         else

@@ -19,9 +19,13 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from settings_sync import SettingsSyncError, run as run_settings_sync  # noqa: E402
 
 SEMVER_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
@@ -220,7 +224,33 @@ def handle_update(args: argparse.Namespace) -> int:
             args.app_name, result.new_app_version, args.release_tag
         )
 
-    has_changes = result.chart_modified or bool(parent_update)
+    settings_added: Dict[str, str] = {}
+    settings_removed: list = []
+    previous_release_tag = ""
+    settings_changed = False
+
+    if args.settings_file:
+        if not args.settings_file_kind:
+            raise ChartUpdateError(
+                "--settings-file-kind is required when --settings-file is set."
+            )
+        sync = run_settings_sync(
+            app_repo_dir=Path(args.app_repo_dir).resolve(),
+            helm_repo_dir=helm_repo_dir,
+            settings_file=args.settings_file,
+            settings_file_kind=args.settings_file_kind,
+            chart_file=args.chart_file,
+            parent_chart_file=args.parent_chart_file or None,
+            release_tag=args.release_tag,
+        )
+        settings_added = {k: v.value for k, v in sync.added.items()}
+        settings_removed = list(sync.removed)
+        previous_release_tag = sync.previous_tag or ""
+        settings_changed = bool(settings_added or settings_removed)
+
+    has_changes = (
+        result.chart_modified or bool(parent_update) or settings_changed
+    )
 
     result_payload: Dict[str, Any] = {
         "old_app_version": result.old_app_version,
@@ -232,6 +262,10 @@ def handle_update(args: argparse.Namespace) -> int:
         "parent_chart_update": parent_update or None,
         "branch_name": branch_name,
         "has_changes": has_changes,
+        "settings_added": settings_added,
+        "settings_removed": settings_removed,
+        "settings_changed": settings_changed,
+        "previous_release_tag": previous_release_tag,
     }
 
     if args.result_file:
@@ -252,6 +286,10 @@ def handle_update(args: argparse.Namespace) -> int:
             "chart_modified": result.chart_modified,
             "branch_name": branch_name,
             "has_changes": has_changes,
+            "settings_added": settings_added,
+            "settings_removed": settings_removed,
+            "settings_changed": settings_changed,
+            "previous_release_tag": previous_release_tag,
         },
     )
 
@@ -269,6 +307,10 @@ def parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     parser.add_argument("--result-file", default="")
     parser.add_argument("--app-name", default="")
     parser.add_argument("--github-output", default="")
+    parser.add_argument("--settings-file", default="")
+    parser.add_argument("--settings-file-kind", default="")
+    parser.add_argument("--source-repo", default="")
+    parser.add_argument("--app-repo-dir", default=".")
     return parser.parse_args(argv)
 
 
@@ -276,7 +318,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     try:
         return handle_update(args)
-    except ChartUpdateError as exc:
+    except (ChartUpdateError, SettingsSyncError) as exc:
         print(f"[update_helm_chart] {exc}", file=sys.stderr)
         return 1
 

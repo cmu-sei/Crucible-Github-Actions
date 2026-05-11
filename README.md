@@ -33,6 +33,8 @@ The action:
 | `helm_repo_token` |  | Optional repository token override. |
 | `git_user_name` |  | Commit author name (`github-actions[bot]`). |
 | `git_user_email` |  | Commit author email (`41898282+github-actions[bot]@users.noreply.github.com`). |
+| `settings_file` |  | Path in the calling repo to the app settings file (e.g. `Player.Api/appsettings.json`). When set, enables the settings-sync phase. Omit to disable. |
+| `settings_file_kind` |  | One of `dotnet-appsettings` or `angular-settings`. Required when `settings_file` is set. |
 
 #### Outputs
 
@@ -43,6 +45,20 @@ The action:
 - `chart_modified` – `true` when an update was required
 - `branch_name` – suggested feature branch for the PR
 - `has_changes` – `true` when any files were modified
+- `settings_changed` – `true` when settings were added or removed between the previous and new release tags
+- `settings_added` – JSON object mapping added flattened setting keys to their leaf type
+- `settings_removed` – JSON array of removed flattened setting keys
+- `previous_release_tag` – resolved previous release tag (empty when no prior tag exists)
+
+#### Settings sync (optional)
+
+When `settings_file` and `settings_file_kind` are set, the action additionally diffs the settings file between the previous and new release tags and propagates added/removed leaf keys:
+
+- Updates the `env:` block (for `dotnet-appsettings`) or `settings:` / `settingsYaml:` blocks (for `angular-settings`) in the child chart's `values.yaml`.
+- Mirrors the same changes under the parent chart's subkey in the parent `values.yaml` when `parent_chart_file` is set and the subkey's block already exists. The subkey is derived from the chart folder name.
+- Appends a "Settings changes to review" section to the helm-charts PR body listing added/removed keys so a human can update the hand-curated chart README.
+
+New keys are inserted with blank placeholders by JSON type (`""`, `false`, `0`). No README edits are made automatically. Re-running the action for the same release is a no-op.
 
 #### Example Usage
 
