@@ -60,6 +60,8 @@ When `settings_file` and `settings_file_kind` are set, the action additionally d
 
 New keys are inserted with blank placeholders by JSON type (`""`, `false`, `0`). No README edits are made automatically. Re-running the action for the same release is a no-op.
 
+When `settings_file` is set the action checks out the calling repository at `release_tag` with full tag history into a `source/` sub-path. Consumers do not need to add their own `actions/checkout` step.
+
 #### Example Usage
 
 ```yaml
