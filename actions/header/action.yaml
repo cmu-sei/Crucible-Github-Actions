@@ -15,11 +15,11 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v6
       with:
         ref: ${{ github.head_ref }}
 
-    - uses: actions/setup-python@v2
+    - uses: actions/setup-python@v6
       with:
         python-version: "3.x"
         architecture: "x64"
@@ -47,7 +47,7 @@ runs:
 
     - name: Push changes
       if: env.FILESCHANGED == 'TRUE'
-      uses: ad-m/github-push-action@master
+      uses: ad-m/github-push-action@v1.1.0
       with:
         github_token: ${{ inputs.github_token }}
         branch: ${{ github.head_ref }}
