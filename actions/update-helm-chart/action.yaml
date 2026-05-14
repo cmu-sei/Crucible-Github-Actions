@@ -114,8 +114,17 @@ runs:
         owner: ${{ steps.repo_meta.outputs.owner }}
         repositories: ${{ steps.repo_meta.outputs.name }}
 
+    - name: Checkout source repository
+      if: inputs.settings_file != ''
+      uses: actions/checkout@v6
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ inputs.release_tag }}
+        path: source
+        fetch-depth: 0
+
     - name: Checkout Helm charts repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         repository: ${{ inputs.helm_chart_repo }}
         token: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
@@ -123,7 +132,7 @@ runs:
         ref: main
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: "3.x"
 
@@ -148,7 +157,7 @@ runs:
           --settings-file "${{ inputs.settings_file }}" \
           --settings-file-kind "${{ inputs.settings_file_kind }}" \
           --source-repo "$SOURCE_REPO" \
-          --app-repo-dir "$GITHUB_WORKSPACE"
+          --app-repo-dir "source"
       shell: bash
 
     - name: Derive README path
