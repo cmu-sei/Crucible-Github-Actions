@@ -34,7 +34,7 @@ The action:
 | `git_user_name` |  | Commit author name (`github-actions[bot]`). |
 | `git_user_email` |  | Commit author email (`41898282+github-actions[bot]@users.noreply.github.com`). |
 | `settings_file` |  | Path in the calling repo to the app settings file (e.g. `Player.Api/appsettings.json`). When set, enables the settings-sync phase. Omit to disable. |
-| `settings_file_kind` |  | One of `dotnet-appsettings` or `angular-settings`. Required when `settings_file` is set. |
+| `settings_file_kind` |  | One of `dotnet-appsettings`, `dotnet-conf`, or `angular-settings`. Required when `settings_file` is set. |
 
 #### Outputs
 
@@ -54,11 +54,27 @@ The action:
 
 When `settings_file` and `settings_file_kind` are set, the action additionally diffs the settings file between the previous and new release tags and propagates added/removed leaf keys:
 
-- Updates the `env:` block (for `dotnet-appsettings`) or `settings:` / `settingsYaml:` blocks (for `angular-settings`) in the child chart's `values.yaml`.
+- Updates the `env:` block (for `dotnet-appsettings` and `dotnet-conf`) or `settings:` / `settingsYaml:` blocks (for `angular-settings`) in the child chart's `values.yaml`.
 - Mirrors the same changes under the parent chart's subkey in the parent `values.yaml` when `parent_chart_file` is set and the subkey's block already exists. The subkey is derived from the chart folder name.
 - Appends a "Settings changes to review" section to the helm-charts PR body listing added/removed keys so a human can update the hand-curated chart README.
 
 New keys are inserted with blank placeholders by JSON type (`""`, `false`, `0`). No README edits are made automatically. Re-running the action for the same release is a no-op.
+
+##### Choosing between `dotnet-appsettings` and `dotnet-conf`
+
+Both kinds target ASP.NET Core configuration files and emit the same `Section__Key` flat-key shape into the chart's `env:` block. Pick the one that matches the file your app ships:
+
+| | `dotnet-appsettings` | `dotnet-conf` |
+| --- | --- | --- |
+| **File format** | JSON (with optional JSONC `//` and `/* */` comments) | INI-style: `Section__Key = value`, optionally prefixed with `#` to comment out a default |
+| **Typical filename** | `appsettings.json` | `appsettings.conf` |
+| **Type inference** | Yes — strings, bools, and numbers are detected from the JSON literal, so placeholders are typed (`""`, `false`, `0`) | No — the format is untyped, so every new key is added as `""` |
+| **Nested objects** | Walks the JSON tree to build `Section__Key` keys | Authors already write `Section__Key` directly; the parser just collects them line-by-line |
+| **Scalar arrays** | First element emitted as `Key__0` | Authors typically write `Key__0 = ...` directly; collected as-is |
+| **Comments** | JSONC line/block comments stripped before parsing | Lines starting with `#` (including dividers like `####`) are tolerated; entries are recognized whether commented out or active |
+| **Duplicate keys** | Last value wins (standard JSON semantics) | First occurrence wins; later duplicates (e.g., the example/dev sections at the bottom of `appsettings.conf`) are ignored |
+
+If the source file is a hybrid you control, prefer `dotnet-appsettings` so placeholders pick up the right type. Use `dotnet-conf` when the upstream project distributes a `.conf` file — feeding that text to the JSON parser would fail.
 
 When `settings_file` is set the action checks out the calling repository at `release_tag` with full tag history into a `source/` sub-path. Consumers do not need to add their own `actions/checkout` step.
 

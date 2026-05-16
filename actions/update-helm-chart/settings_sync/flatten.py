@@ -1,11 +1,15 @@
 """Flatten a parsed JSON object to a leaf-path -> type map.
 
-Two strategies:
+Three strategies:
   - flatten_dotnet: emits ASP.NET Core env-var style keys (`Section__Key`,
     `Array__0`). Skips containers that end up empty after JSONC comments are
     stripped upstream.
   - flatten_angular: emits JSON Pointer paths (`/Section/key`, `/Array/0`).
     Used for strict-JSON Angular settings files. Same empty-container skip.
+  - flatten_dotnet_conf: parses INI-style `appsettings.conf` text (lines like
+    `Section__Key = value`, optionally prefixed with `#` to comment them out)
+    and emits the same `Section__Key` shape as flatten_dotnet. Every entry is
+    treated as a STRING leaf since the .conf format is untyped.
 
 Only scalar-array elements are expanded, and only element 0 is emitted as a
 placeholder (matching existing values.yaml convention). Object arrays and
@@ -60,6 +64,27 @@ def _walk_dotnet(node: Any, path: list[str], out: Dict[str, LeafType]) -> None:
     if lt is None:
         return
     out["__".join(path)] = lt
+
+
+def flatten_dotnet_conf(raw: str) -> Dict[str, LeafType]:
+    result: Dict[str, LeafType] = {}
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            stripped = stripped.lstrip("#").strip()
+            if not stripped:
+                continue
+        if "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if not key:
+            continue
+        if key in result:
+            continue
+        result[key] = LeafType.STRING
+    return result
 
 
 def flatten_angular(data: Any) -> Dict[str, LeafType]:
