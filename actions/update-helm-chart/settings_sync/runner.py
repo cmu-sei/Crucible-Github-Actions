@@ -11,7 +11,12 @@ from ruamel.yaml import YAML
 
 from . import git_io
 from .diff import compute_diff
-from .flatten import LeafType, flatten_angular, flatten_dotnet
+from .flatten import (
+    LeafType,
+    flatten_angular,
+    flatten_dotnet,
+    flatten_dotnet_conf,
+)
 from .jsonc import strip_jsonc_comments
 from . import patch_angular, patch_dotnet
 
@@ -43,7 +48,11 @@ def run(
     parent_chart_file: Optional[str],
     release_tag: str,
 ) -> RunResult:
-    if settings_file_kind not in ("dotnet-appsettings", "angular-settings"):
+    if settings_file_kind not in (
+        "dotnet-appsettings",
+        "dotnet-conf",
+        "angular-settings",
+    ):
         raise SettingsSyncError(
             f"Unknown settings_file_kind: {settings_file_kind!r}"
         )
@@ -109,6 +118,8 @@ def _parse_and_flatten(raw: str, kind: str) -> Dict[str, LeafType]:
         except json.JSONDecodeError as exc:
             raise SettingsSyncError(f"Failed to parse appsettings: {exc}")
         return flatten_dotnet(data)
+    if kind == "dotnet-conf":
+        return flatten_dotnet_conf(raw)
     try:
         data = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError as exc:
@@ -129,7 +140,7 @@ def _apply(
     if doc is None:
         return False
 
-    if kind == "dotnet-appsettings":
+    if kind in ("dotnet-appsettings", "dotnet-conf"):
         changed = patch_dotnet.patch_values(doc, subkey, added, removed)
     else:
         changed = patch_angular.patch_values(doc, subkey, added, removed)

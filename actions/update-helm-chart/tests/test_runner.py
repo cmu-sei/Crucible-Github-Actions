@@ -111,6 +111,69 @@ def test_missing_new_file_raises(tmp_path: Path, monkeypatch):
         )
 
 
+def test_dotnet_conf_end_to_end_diffs_added_and_removed_keys(
+    tmp_path: Path, monkeypatch
+):
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+
+    helm_repo = tmp_path / "helm"
+    child_values = (
+        helm_repo / "charts" / "topomojo" / "charts" / "topomojo-api" / "values.yaml"
+    )
+    parent_values = helm_repo / "charts" / "topomojo" / "values.yaml"
+    _write(child_values, "env:\n  Existing__Key: \"\"\n  Removed__Key: \"\"\n")
+    _write(
+        parent_values,
+        "topomojo-api:\n  env:\n    Existing__Key: \"\"\n    Removed__Key: \"\"\n",
+    )
+
+    prev_conf = (
+        "# Existing__Key =\n"
+        "# Removed__Key =\n"
+    )
+    new_conf = (
+        "####################\n"
+        "## AppSettings\n"
+        "####################\n"
+        "# Existing__Key =\n"
+        "# New__Key = topomojo-api\n"
+        "# New__Flag = true\n"
+    )
+
+    fake = _FakeGit(
+        tags=["v3.6.0", "v3.5.0"],
+        files={
+            ("v3.5.0", "src/TopoMojo.Api/appsettings.conf"): prev_conf,
+            ("v3.6.0", "src/TopoMojo.Api/appsettings.conf"): new_conf,
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    result = runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="src/TopoMojo.Api/appsettings.conf",
+        settings_file_kind="dotnet-conf",
+        chart_file="charts/topomojo/charts/topomojo-api/Chart.yaml",
+        parent_chart_file="charts/topomojo/Chart.yaml",
+        release_tag="v3.6.0",
+    )
+
+    assert result.previous_tag == "v3.5.0"
+    assert result.added == {
+        "New__Key": LeafType.STRING,
+        "New__Flag": LeafType.STRING,
+    }
+    assert result.removed == ["Removed__Key"]
+    child_text = child_values.read_text()
+    parent_text = parent_values.read_text()
+    assert "New__Key" in child_text and "New__Flag" in child_text
+    assert "Removed__Key" not in child_text
+    assert "New__Key" in parent_text and "New__Flag" in parent_text
+    assert "Removed__Key" not in parent_text
+
+
 def test_no_previous_tag_treats_prev_as_empty(tmp_path: Path, monkeypatch):
     app_repo = tmp_path / "app"
     app_repo.mkdir()

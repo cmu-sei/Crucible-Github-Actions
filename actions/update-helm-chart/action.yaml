@@ -46,7 +46,7 @@ inputs:
     required: false
     default: ""
   settings_file_kind:
-    description: "Strategy for parsing settings_file. One of: dotnet-appsettings, angular-settings. Required when settings_file is set."
+    description: "Strategy for parsing settings_file. One of: dotnet-appsettings, dotnet-conf, angular-settings. Required when settings_file is set."
     required: false
     default: ""
 outputs:
