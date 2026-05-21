@@ -331,7 +331,7 @@ jobs:
       # via the `digests-default-*` pattern.
       - name: Upload default digest
         if: needs.prepare.outputs.push == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-default-${{ matrix.safe }}
           path: /tmp/digests/default/*
@@ -384,7 +384,7 @@ jobs:
 
       - name: Upload additional digest
         if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-additional-${{ matrix.safe }}
           path: /tmp/digests/additional/*
@@ -401,7 +401,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download default digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests/default
           pattern: digests-default-*
@@ -409,7 +409,7 @@ jobs:
 
       - name: Download additional digests
         if: needs.prepare.outputs.has_additional_target == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests/additional
           pattern: digests-additional-*
