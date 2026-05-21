@@ -107,7 +107,7 @@ runs:
       if: >
         (inputs.github_app_id != '') &&
         (inputs.github_app_private_key != '')
-      uses: actions/create-github-app-token@v1
+      uses: actions/create-github-app-token@v3
       with:
         app-id: ${{ inputs.github_app_id }}
         private-key: ${{ inputs.github_app_private_key }}
