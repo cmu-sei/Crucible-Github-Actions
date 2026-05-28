@@ -24,8 +24,9 @@ The action:
 | Name | Required | Description |
 | --- | --- | --- |
 | `app_name` | ✅ | Friendly application name used for commit and PR title, e.g. `TopoMojo API`. |
-| `github_app_id` | ✅ | Optional GitHub App ID that should mint a token for pushing to the Helm repo. Provide via a secret. |
-| `github_app_private_key` | ✅ | Private key for the GitHub App. Provide via a secret. |
+| `github_app_client_id` |  | GitHub App client ID that should mint a token for pushing to the Helm repo. Provide via a secret. Preferred over `github_app_id`. |
+| `github_app_id` |  | **Deprecated** — use `github_app_client_id`. GitHub App ID that should mint a token for pushing to the Helm repo. |
+| `github_app_private_key` |  | Private key for the GitHub App. Provide via a secret. Required when either `github_app_client_id` or `github_app_id` is set. |
 | `chart_file` | ✅ | Path to the application's `Chart.yaml` within the Helm repo, e.g. `charts/topomojo/charts/topomojo-api/Chart.yaml`. |
 | `release_tag` |  | Tag from the calling workflow (defaults to `${{ github.event.release.tag_name }}`). |
 | `parent_chart_file` |  | Optional path to a parent `Chart.yaml` that should be bumped. |
@@ -95,7 +96,7 @@ jobs:
         uses: cmu-sei/Crucible-Github-Actions/actions/update-helm-chart@main
         with:
           app_name: TopoMojo API
-          github_app_id: ${{ secrets.CRUCIBLE_HELM_UPDATE_APP_ID }}
+          github_app_client_id: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
           github_app_private_key: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
           chart_file: charts/topomojo/charts/topomojo-api/Chart.yaml
           parent_chart_file: charts/topomojo/Chart.yaml
@@ -104,7 +105,7 @@ jobs:
 ### Repository Configuration Checklist
 
 1. **Create credentials** for pushing to `cmu-sei/helm-charts`.
-   - Preferred: register a GitHub App with `contents:write` and `pull_request:write`, install it on `cmu-sei/helm-charts`, and store the app ID and private key as repository secrets (e.g., `CRUCIBLE_HELM_UPDATE_APP_ID`/`CRUCIBLE_HELM_UPDATE_PRIVATE_KEY`).
+   - Preferred: register a GitHub App with `contents:write` and `pull_request:write`, install it on `cmu-sei/helm-charts`, and store the app client ID and private key as repository secrets (e.g., `CRUCIBLE_HELM_UPDATE_CLIENT_ID`/`CRUCIBLE_HELM_UPDATE_PRIVATE_KEY`). The legacy app-ID secret (`CRUCIBLE_HELM_UPDATE_APP_ID`) and `github_app_id` input are deprecated.
    - Alternative: use a fine-grained PAT limited to the Helm charts repo and store as `HELM_CHARTS_TOKEN`; pass it via the optional `helm_repo_token` input.
 2. **Add the workflow** (example above) to the application repository.
    - Trigger on `release` with `types: [published]`.
