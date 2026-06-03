@@ -10,10 +10,6 @@ inputs:
     description: "GitHub App client ID used to mint a token for the Helm repo."
     required: false
     default: ""
-  github_app_id:
-    description: "Deprecated: GitHub App ID used to mint a token for the Helm repo. Use github_app_client_id instead."
-    required: false
-    default: ""
   github_app_private_key:
     description: "Private key for the GitHub App when minting a token."
     required: false
@@ -108,21 +104,14 @@ runs:
         echo "owner=$owner" >> "$GITHUB_OUTPUT"
         echo "name=$name" >> "$GITHUB_OUTPUT"
 
-    - name: Warn on deprecated github_app_id input
-      if: inputs.github_app_id != ''
-      shell: bash
-      run: |
-        echo "::warning::The 'github_app_id' input is deprecated. Migrate to 'github_app_client_id' (see https://github.com/actions/create-github-app-token/releases/tag/v3.1.0)."
-
     - name: Mint Helm charts app token
       id: mint_token
       if: >
-        ((inputs.github_app_client_id != '') || (inputs.github_app_id != '')) &&
+        (inputs.github_app_client_id != '') &&
         (inputs.github_app_private_key != '')
       uses: actions/create-github-app-token@v3
       with:
         client-id: ${{ inputs.github_app_client_id }}
-        app-id: ${{ inputs.github_app_id }}
         private-key: ${{ inputs.github_app_private_key }}
         owner: ${{ steps.repo_meta.outputs.owner }}
         repositories: ${{ steps.repo_meta.outputs.name }}
