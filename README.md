@@ -143,6 +143,22 @@ jobs:
 
 The action checks out the current branch, runs `header.py` to add missing headers, and automatically commits/pushes fixes when changes are detected.
 
+#### Exempting files with `.headerignore`
+
+Some files should never receive the Crucible header — for example, vendored sources or files managed by external tooling that carry their own upstream license. To exempt them, add a `.headerignore` file at the root of the calling repository. It uses gitignore-style syntax:
+
+- One pattern per line; blank lines and lines starting with `#` are ignored.
+- Glob patterns are matched against each file's repo-relative, forward-slash path (e.g. `*.md`, `vendor/**`).
+- A directory pattern (a bare directory name or one with a trailing slash, e.g. `.agents/`) exempts everything beneath it.
+
+```gitignore
+# .headerignore — files managed by external tooling; do not add SEI headers.
+.agents/
+.claude/
+```
+
+Matched files are logged as `skipping (ignored): <path>` and left untouched. When no `.headerignore` file is present, every supported file is checked as before.
+
 ## Reusable Workflows
 
 ### Build & Publish Image
