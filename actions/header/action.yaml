@@ -1,6 +1,6 @@
 name: Header Check
 
-description: "Ensures that all files have a license header"
+description: "Ensures that all files have a license header. Paths matched by a .headerignore file in the repo root are exempted."
 
 inputs:
   github_token:
