@@ -15,7 +15,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         ref: ${{ github.head_ref }}
 
@@ -47,7 +47,7 @@ runs:
 
     - name: Push changes
       if: env.FILESCHANGED == 'TRUE'
-      uses: ad-m/github-push-action@v1.1.0
+      uses: ad-m/github-push-action@v1.3.0
       with:
         github_token: ${{ inputs.github_token }}
         branch: ${{ github.head_ref }}
