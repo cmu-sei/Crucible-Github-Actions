@@ -118,7 +118,7 @@ runs:
 
     - name: Checkout source repository
       if: inputs.settings_file != ''
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: ${{ github.repository }}
         ref: ${{ inputs.release_tag }}
@@ -126,7 +126,7 @@ runs:
         fetch-depth: 0
 
     - name: Checkout Helm charts repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: ${{ inputs.helm_chart_repo }}
         token: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
