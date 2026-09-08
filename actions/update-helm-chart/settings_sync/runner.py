@@ -34,8 +34,31 @@ class RunResult:
     parent_modified: bool
 
 
+# Round-trip settings chosen so that re-emitting an untouched values.yaml is a
+# no-op. ruamel re-renders the whole document on dump, so anything left at a
+# default that disagrees with the chart's existing style shows up as unrelated
+# churn in the release PR.
+#
+#   indent(sequence=4, offset=2) — charts are written in the `helm create` style,
+#     with list items indented under their key:
+#         hosts:
+#           - host: x
+#     ruamel defaults to sequence=2/offset=0, which re-emits every block
+#     sequence in the file dedented flush with its parent key:
+#         hosts:
+#         - host: x
+#     helm-charts' parent/child values-sync CI check compares the parent block
+#     against the child file as raw text, so that reflow fails the check for a
+#     release that only added or removed settings keys.
+#
+#   width — ruamel folds plain/quoted scalars past 80 columns. Long values such
+#     as Authorization__AuthorizationScope wrap at a different column in the
+#     parent (indented under the subchart key) than in the child, so folding
+#     alone is enough to desync the two files.
 _yaml = YAML()
 _yaml.preserve_quotes = True
+_yaml.indent(mapping=2, sequence=4, offset=2)
+_yaml.width = 4096
 
 
 def run(

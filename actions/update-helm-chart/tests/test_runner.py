@@ -1,4 +1,5 @@
 import json
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -172,6 +173,289 @@ def test_dotnet_conf_end_to_end_diffs_added_and_removed_keys(
     assert "Removed__Key" not in child_text
     assert "New__Key" in parent_text and "New__Flag" in parent_text
     assert "Removed__Key" not in parent_text
+
+
+def test_dotnet_patch_leaves_untouched_formatting_byte_identical(
+    tmp_path: Path, monkeypatch
+):
+    """Only the patched keys may change; everything else round-trips as-is.
+
+    Guards two ruamel dump defaults that used to rewrite unrelated lines:
+    block sequences dedenting flush with their parent key, and scalars past
+    80 columns folding onto a continuation line. Either one desyncs the
+    parent block from the child file and fails helm-charts' parent/child
+    values-sync CI check.
+    """
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+
+    helm_repo = tmp_path / "helm"
+    child_values = (
+        helm_repo / "charts" / "alloy" / "charts" / "alloy-api" / "values.yaml"
+    )
+    parent_values = helm_repo / "charts" / "alloy" / "values.yaml"
+
+    child_src = textwrap.dedent(
+        """\
+        ingress:
+          enabled: false
+          hosts:
+            - host: chart-example.local
+              paths:
+                - path: /(api|swagger|hubs)
+                  pathType: ImplementationSpecific
+          tls: []
+
+        env:
+          Authorization__AuthorizationScope: "alloy-api player-api caster-api steamfitter-api vm-api"
+        """
+    )
+    parent_src = textwrap.dedent(
+        """\
+        alloy-api:
+          ingress:
+            enabled: false
+            hosts:
+              - host: chart-example.local
+                paths:
+                  - path: /(api|swagger|hubs)
+                    pathType: ImplementationSpecific
+            tls: []
+
+          env:
+            Authorization__AuthorizationScope: "alloy-api player-api caster-api steamfitter-api vm-api"
+        """
+    )
+    _write(child_values, child_src)
+    _write(parent_values, parent_src)
+
+    prev_appsettings = json.dumps(
+        {"Authorization": {"AuthorizationScope": "alloy-api"}}
+    )
+    new_appsettings = json.dumps(
+        {
+            "Authorization": {"AuthorizationScope": "alloy-api"},
+            "Email": {"SmtpHost": ""},
+        }
+    )
+
+    fake = _FakeGit(
+        tags=["v3.7.0", "v3.6.0"],
+        files={
+            ("v3.6.0", "Alloy.Api/appsettings.json"): prev_appsettings,
+            ("v3.7.0", "Alloy.Api/appsettings.json"): new_appsettings,
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="Alloy.Api/appsettings.json",
+        settings_file_kind="dotnet-appsettings",
+        chart_file="charts/alloy/charts/alloy-api/Chart.yaml",
+        parent_chart_file="charts/alloy/Chart.yaml",
+        release_tag="v3.7.0",
+    )
+
+    assert child_values.read_text() == child_src + '  Email__SmtpHost: ""\n'
+    assert parent_values.read_text() == parent_src + '    Email__SmtpHost: ""\n'
+
+
+def test_dotnet_append_keeps_blank_line_after_parent_subchart_block(
+    tmp_path: Path, monkeypatch
+):
+    """A blank line separating subchart blocks stays at the end of the block.
+
+    ruamel hangs that blank line off the block's last key, so appending keys
+    used to push it between the old and new keys and drop the separator before
+    the next subchart — leaving the parent block one blank line off from the
+    child file it must mirror.
+    """
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+
+    helm_repo = tmp_path / "helm"
+    child_values = (
+        helm_repo
+        / "charts"
+        / "steamfitter"
+        / "charts"
+        / "steamfitter-api"
+        / "values.yaml"
+    )
+    parent_values = helm_repo / "charts" / "steamfitter" / "values.yaml"
+
+    child_src = textwrap.dedent(
+        """\
+        env:
+          Existing__Key: ""
+
+          # Optional: override the service name reported to collectors
+          # OTEL_SERVICE_NAME: steamfitter-api
+        """
+    )
+    parent_src = textwrap.dedent(
+        """\
+        steamfitter-api:
+          env:
+            Existing__Key: ""
+
+            # Optional: override the service name reported to collectors
+            # OTEL_SERVICE_NAME: steamfitter-api
+
+        steamfitter-ui:
+          env:
+            APP_BASEHREF: /steamfitter
+        """
+    )
+    _write(child_values, child_src)
+    _write(parent_values, parent_src)
+
+    fake = _FakeGit(
+        tags=["3.10.0", "3.9.13"],
+        files={
+            ("3.9.13", "Steamfitter.Api/appsettings.json"): json.dumps(
+                {"Existing": {"Key": ""}}
+            ),
+            ("3.10.0", "Steamfitter.Api/appsettings.json"): json.dumps(
+                {"Existing": {"Key": ""}, "Email": {"SmtpHost": ""}}
+            ),
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="Steamfitter.Api/appsettings.json",
+        settings_file_kind="dotnet-appsettings",
+        chart_file="charts/steamfitter/charts/steamfitter-api/Chart.yaml",
+        parent_chart_file="charts/steamfitter/Chart.yaml",
+        release_tag="3.10.0",
+    )
+
+    assert child_values.read_text() == child_src + '  Email__SmtpHost: ""\n'
+    assert parent_values.read_text() == textwrap.dedent(
+        """\
+        steamfitter-api:
+          env:
+            Existing__Key: ""
+
+            # Optional: override the service name reported to collectors
+            # OTEL_SERVICE_NAME: steamfitter-api
+            Email__SmtpHost: ""
+
+        steamfitter-ui:
+          env:
+            APP_BASEHREF: /steamfitter
+        """
+    )
+
+
+def test_dotnet_append_keeps_dedented_trailing_comments_with_next_key(
+    tmp_path: Path, monkeypatch
+):
+    """Comments introducing the next sibling key stay above that key.
+
+    topomojo's env: block is followed by "## Create a seed data file ..."
+    documenting `seedData:`. ruamel hangs those lines off the last env: key, so
+    appending used to emit the new setting below them — reading as if it
+    belonged to seedData. Comments indented with the env: keys keep their place.
+    """
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+
+    helm_repo = tmp_path / "helm"
+    child_values = (
+        helm_repo / "charts" / "topomojo" / "charts" / "topomojo-api" / "values.yaml"
+    )
+    parent_values = helm_repo / "charts" / "topomojo" / "values.yaml"
+
+    child_src = textwrap.dedent(
+        """\
+        env:
+          Existing__Key: ""
+
+          # Optional: override the service name reported to collectors
+          # OTEL_SERVICE_NAME: topomojo-api
+
+        ## Create a seed data file based on the contents of an existing secret
+        ## or by values that support templating via the tpl function.
+        seedData:
+          existingSeedDataSecretKey: "seedData"
+        """
+    )
+    parent_src = textwrap.dedent(
+        """\
+        topomojo-api:
+          env:
+            Existing__Key: ""
+
+            # Optional: override the service name reported to collectors
+            # OTEL_SERVICE_NAME: topomojo-api
+
+          ## Create a seed data file based on the contents of an existing secret
+          ## or by values that support templating via the tpl function.
+          seedData:
+            existingSeedDataSecretKey: "seedData"
+        """
+    )
+    _write(child_values, child_src)
+    _write(parent_values, parent_src)
+
+    fake = _FakeGit(
+        tags=["v3.6.0", "v3.5.0"],
+        files={
+            ("v3.5.0", "src/TopoMojo.Api/appsettings.conf"): "# Existing__Key =\n",
+            ("v3.6.0", "src/TopoMojo.Api/appsettings.conf"): (
+                "# Existing__Key =\n# New__Key =\n"
+            ),
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="src/TopoMojo.Api/appsettings.conf",
+        settings_file_kind="dotnet-conf",
+        chart_file="charts/topomojo/charts/topomojo-api/Chart.yaml",
+        parent_chart_file="charts/topomojo/Chart.yaml",
+        release_tag="v3.6.0",
+    )
+
+    assert child_values.read_text() == textwrap.dedent(
+        """\
+        env:
+          Existing__Key: ""
+
+          # Optional: override the service name reported to collectors
+          # OTEL_SERVICE_NAME: topomojo-api
+          New__Key: ""
+
+        ## Create a seed data file based on the contents of an existing secret
+        ## or by values that support templating via the tpl function.
+        seedData:
+          existingSeedDataSecretKey: "seedData"
+        """
+    )
+    assert parent_values.read_text() == textwrap.dedent(
+        """\
+        topomojo-api:
+          env:
+            Existing__Key: ""
+
+            # Optional: override the service name reported to collectors
+            # OTEL_SERVICE_NAME: topomojo-api
+            New__Key: ""
+
+          ## Create a seed data file based on the contents of an existing secret
+          ## or by values that support templating via the tpl function.
+          seedData:
+            existingSeedDataSecretKey: "seedData"
+        """
+    )
 
 
 def test_no_previous_tag_treats_prev_as_empty(tmp_path: Path, monkeypatch):
