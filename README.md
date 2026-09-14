@@ -60,6 +60,8 @@ When `settings_file` and `settings_file_kind` are set, the action additionally d
 
 New keys are inserted with blank placeholders by JSON type (`""`, `false`, `0`). No README edits are made automatically. Re-running the action for the same release is a no-op.
 
+Only the added and removed key lines change. The `values.yaml` files are edited as a YAML round-trip, so comments, quoting, block-sequence indentation (the `helm create` style, with list items indented under their key), and long unindented scalars are all preserved. Additions are appended inside the patched block: a blank line separating it from the next key stays after the new keys, and so do any comments dedented out of the block to introduce that next key. This matters because helm-charts compares a parent chart's subkey block against the child `values.yaml` as raw text in CI — any incidental reformatting desyncs the pair and fails the check.
+
 ##### Choosing between `dotnet-appsettings` and `dotnet-conf`
 
 Both kinds target ASP.NET Core configuration files and emit the same `Section__Key` flat-key shape into the chart's `env:` block. Pick the one that matches the file your app ships:
