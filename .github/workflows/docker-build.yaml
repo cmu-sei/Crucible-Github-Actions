@@ -65,6 +65,9 @@ on:
       DOCKERHUB_PASSWORD:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   prepare:
     name: Prepare build matrix
@@ -462,6 +465,8 @@ jobs:
       - name: Generate additional target tags
         if: needs.prepare.outputs.has_additional_target == 'true'
         id: target_tags
+        env:
+          ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
         run: |
           set -euo pipefail
           TARGET_TAGS=""
@@ -471,7 +476,7 @@ jobs:
             tag_part="${full_tag##*:}"
             image_name="${full_tag%%:*}"
             [[ -z "$tag_part" ]] && continue
-            new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
+            new_tag="${image_name}:${tag_part}-${ADDITIONAL_TARGET}"
             if [[ -n "$TARGET_TAGS" ]]; then
               TARGET_TAGS="${TARGET_TAGS}"$'\n'
             fi
