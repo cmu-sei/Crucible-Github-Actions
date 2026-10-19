@@ -126,12 +126,19 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: ${{ needs.plan.outputs.queries }}
+          # actions/unpinned-tag is excluded by org decision: consumers reference
+          # Crucible-Github-Actions by floating per-family tags (e.g. @codeql-v1)
+          # so that fixes propagate without a PR in every repo. Pin third-party
+          # actions by SHA where you want that guarantee.
           config: |
             paths-ignore:
               - "**/node_modules/**"
               - "**/dist/**"
               - "**/bin/**"
               - "**/obj/**"
+            query-filters:
+              - exclude:
+                  id: actions/unpinned-tag
 
       - name: Build (manual)
         if: matrix.build-mode == 'manual'

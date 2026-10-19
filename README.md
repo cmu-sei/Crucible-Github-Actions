@@ -298,7 +298,7 @@ Migration notes:
 
 - CodeQL v4 rejects the old language aliases: callers migrating from `javascript` must use `javascript-typescript`.
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
-- The `actions` scan raises `actions/unpinned-tag` on tag-pinned `uses:` refs, including `@codeql-v1` itself, and that rule is in the default suite too (whether to exclude it via `query-filters` is pending an org decision).
+- The `actions/unpinned-tag` query is excluded centrally (via `query-filters` in the shared workflow) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
 
 ## Releasing
 
