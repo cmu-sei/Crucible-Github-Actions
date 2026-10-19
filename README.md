@@ -203,6 +203,97 @@ jobs:
 
 Callers inherit the workflow’s caching, tagging, and push logic without duplicating build boilerplate across repositories.
 
+### CodeQL
+
+`.github/workflows/codeql.yaml` is a `workflow_call` reusable workflow that runs CodeQL code scanning (`github/codeql-action` v4) so each repository's CodeQL file can be a short caller instead of its own copy of the analysis steps.
+
+- **`plan`** validates `languages` and `build-mode` against an allowlist and builds a matrix of `{language, build-mode}` entries. The `actions` language (the caller's own GitHub Actions workflows) is always added unless `include-actions` is `false`.
+- **`analyze`** runs one job per language: checkout, CodeQL init, an optional manual build, and analysis, uploading results to the repository's **Security → Code scanning** tab under the category `/language:<language>`.
+
+Build modes: interpreted languages (`javascript-typescript`, `python`, `ruby`, `rust`) and `actions` always use `none`. C# defaults to `none` (no build needed); set `build-mode` to `autobuild` or `manual` to analyze a real build instead (the .NET SDK is then installed from the repository's `global.json`). Other compiled languages (`go`, `java-kotlin`, `c-cpp`, `swift`) use `autobuild`, or `manual` when requested; Go also installs the toolchain from `go.mod`.
+
+The query suite (default `security-extended`) and the `paths-ignore` list (`**/node_modules/**`, `**/dist/**`, `**/bin/**`, `**/obj/**`) are defined centrally in this workflow, so changing them here and cutting a `codeql` release updates every caller.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `languages` | ✅ | Comma-separated CodeQL languages, e.g. `csharp` or `javascript-typescript`. | |
+| `include-actions` |  | Also scan the caller's GitHub Actions workflows (`actions` language). | `true` |
+| `build-mode` |  | C# build mode: `none`, `autobuild`, or `manual`. Other compiled languages use `autobuild` unless this is `manual`. | `none` |
+| `build-command` |  | Shell command run between init and analyze when `build-mode` is `manual` (e.g. `dotnet build Alloy.Api -c Release`). Required for `manual`. | `""` |
+| `query-suite` |  | CodeQL query suite: `default`, `security-extended`, or `security-and-quality`. | `security-extended` |
+| `runs-on` |  | Runner label for the analyze jobs. | `ubuntu-24.04` |
+| `timeout-minutes` |  | Timeout for each analyze job. | `30` |
+
+#### Required Permissions
+
+The shared workflow declares no permissions of its own (`permissions: {}` at the top level); the calling job must grant:
+
+```yaml
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+```
+
+#### Example Usage
+
+API repository (`.github/workflows/codeql-analysis.yml`):
+
+```yaml
+name: CodeQL
+
+# Keep the repo's existing `on:` block as-is when migrating (trigger clean-up is deferred).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 5 * * 5"
+
+permissions: {}
+
+jobs:
+  codeql:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/codeql.yaml@codeql-v1
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      languages: csharp
+```
+
+UI repository (`.github/workflows/codeql-analysis.yml`):
+
+```yaml
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 13 * * 6"
+
+permissions: {}
+
+jobs:
+  codeql:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/codeql.yaml@codeql-v1
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      languages: javascript-typescript
+```
+
+When migrating an existing CodeQL workflow, keep the repo's existing `on:` block; trigger clean-up is a separate effort.
+
 ## Releasing
 
 Each action family in this repository is versioned independently. Releases are tagged per family:
@@ -212,7 +303,8 @@ Each action family in this repository is versioned independently. Releases are t
 | `docker` | `.github/workflows/docker-build.yaml` | `docker-v1.1.7` |
 | `header` | Header Check composite action | `header-v1.0.1` |
 | `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.2.0` |
-| `codeql`, `nuget`, `npm` | Reserved for upcoming families | `codeql-v1.0.0` |
+| `codeql` | `.github/workflows/codeql.yaml` | `codeql-v1.0.0` |
+| `nuget`, `npm` | Reserved for upcoming families | `nuget-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 
