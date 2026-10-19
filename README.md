@@ -214,6 +214,8 @@ Build modes: interpreted languages (`javascript-typescript`, `python`, `ruby`, `
 
 The query suite (default `security-extended`) and the `paths-ignore` list (`**/node_modules/**`, `**/dist/**`, `**/bin/**`, `**/obj/**`) are defined centrally in this workflow, so changing them here and cutting a `codeql` release updates every caller.
 
+This repository scans itself with the same workflow — see `.github/workflows/codeql-analysis.yml` — and is a working caller example.
+
 #### Inputs
 
 | Name | Required | Description | Default |
