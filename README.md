@@ -202,3 +202,30 @@ jobs:
 ```
 
 Callers inherit the workflow’s caching, tagging, and push logic without duplicating build boilerplate across repositories.
+
+## Releasing
+
+Each action family in this repository is versioned independently. Releases are tagged per family:
+
+| Family | Contents | Tag example |
+| --- | --- | --- |
+| `docker` | `.github/workflows/docker-build.yaml` | `docker-v1.1.7` |
+| `header` | Header Check composite action | `header-v1.0.1` |
+| `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.1.0` |
+| `codeql`, `nuget`, `npm` | Reserved for upcoming families | `codeql-v1.0.0` |
+
+Every release produces three tags, all pointing at the same commit:
+
+- `<family>-vX.Y.Z` — immutable, annotated release tag (a GitHub Release is published for it).
+- `<family>-vX.Y` — floating minor tag, force-moved to the latest patch.
+- `<family>-vX` — floating major tag, force-moved to the latest minor/patch.
+
+Consumers should pin the floating major tag (for example `@docker-v1`) so they pick up fixes automatically, and only change their reference for a new major version.
+
+Merging to `main` does **not** release anything. Every merge that touches a family must be followed by a dispatch of the **Cut release** workflow (`.github/workflows/cut-release.yaml`) for that family, otherwise consumers on the floating tag never see the change:
+
+```bash
+gh workflow run cut-release.yaml -R cmu-sei/Crucible-Github-Actions -f family=<family> -f version=X.Y.Z
+```
+
+The workflow tags the commit at the head of the dispatched ref (`main` by default), refuses to run if `<family>-vX.Y.Z` already exists or if the version is not `X.Y.Z`, and creates the Release with generated notes.
