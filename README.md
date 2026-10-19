@@ -228,4 +228,4 @@ Merging to `main` does **not** release anything. Every merge that touches a fami
 gh workflow run cut-release.yaml -R cmu-sei/Crucible-Github-Actions -f family=<family> -f version=X.Y.Z
 ```
 
-The workflow tags the commit at the head of the dispatched ref (`main` by default), refuses to run if `<family>-vX.Y.Z` already exists or if the version is not `X.Y.Z`, and creates the Release with generated notes.
+Releases are cut from `main` only: the workflow tags the current head of `main` and fails if dispatched from any other ref. It also refuses to run if `<family>-vX.Y.Z` already exists or if the version is not `X.Y.Z`. The Release notes are generated from the previous `<family>-vX.Y.Z` tag of the same family, so other families' changes are not listed.

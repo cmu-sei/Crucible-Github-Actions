@@ -4,12 +4,14 @@
 # (docker, header, update-helm-chart, ...). Each family is versioned on
 # its own with tags of the form `<family>-vX.Y.Z`.
 #
-# Dispatching this workflow with a family and an X.Y.Z version:
+# Dispatching this workflow (from main only) with a family and an X.Y.Z
+# version:
 #   1. refuses to run if `<family>-vX.Y.Z` already exists,
 #   2. creates the annotated tag `<family>-vX.Y.Z` at the dispatched SHA,
 #   3. force-moves the floating tags `<family>-vX` and `<family>-vX.Y`
 #      to the same SHA (consumers pin the floating major),
-#   4. publishes a GitHub Release with generated notes.
+#   4. publishes a GitHub Release with notes generated since the previous
+#      `<family>-vX.Y.Z` tag (not another family's Release).
 
 name: Cut release
 
@@ -56,6 +58,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::cut-release must be dispatched from main (got $GITHUB_REF)"
+            exit 1
+          fi
+
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Version '$VERSION' must match X.Y.Z (e.g. 1.2.3)"
             exit 1
@@ -76,6 +83,12 @@ jobs:
             exit 1
           fi
 
+          # Previous patch release of the same family, so generated notes do
+          # not diff against another family's Release. The glob needs two
+          # dots, which excludes the floating vX / vX.Y tags.
+          PREV="$(git tag --list "${FAMILY}-v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname \
+            | grep -vxF "$TAG" | head -n1 || true)"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -89,8 +102,15 @@ jobs:
             "refs/tags/${FAMILY}-v${MAJOR}.${MINOR}"
 
           echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "PREV=$PREV" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$TAG" --title "$TAG" --generate-notes --target "$GITHUB_SHA"
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --generate-notes --target "$GITHUB_SHA")
+          if [[ -n "$PREV" ]]; then
+            args+=(--notes-start-tag "$PREV")
+          fi
+          gh release create "$TAG" "${args[@]}"
