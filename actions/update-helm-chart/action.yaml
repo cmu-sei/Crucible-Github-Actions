@@ -109,7 +109,7 @@ runs:
       if: >
         (inputs.github_app_client_id != '') &&
         (inputs.github_app_private_key != '')
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.github_app_client_id }}
         private-key: ${{ inputs.github_app_private_key }}
@@ -118,7 +118,7 @@ runs:
 
     - name: Checkout source repository
       if: inputs.settings_file != ''
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ github.repository }}
         ref: ${{ inputs.release_tag }}
@@ -126,7 +126,7 @@ runs:
         fetch-depth: 0
 
     - name: Checkout Helm charts repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ inputs.helm_chart_repo }}
         token: ${{ steps.mint_token.outputs.token || inputs.helm_repo_token || env.GH_TOKEN || github.token }}
@@ -134,7 +134,7 @@ runs:
         ref: main
 
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: "3.14"
 
