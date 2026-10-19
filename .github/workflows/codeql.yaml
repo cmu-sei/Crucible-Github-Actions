@@ -1,0 +1,135 @@
+# Reusable CodeQL code-scanning workflow for Crucible repositories.
+#
+# Pipeline shape: plan (validate languages, build the matrix) -> analyze
+# (one job per language). Interpreted languages and the `actions` language
+# always use build-mode `none`. C# defaults to `none` (no build needed);
+# callers can opt into `autobuild` or `manual`. Other compiled languages
+# (go, java-kotlin, c-cpp, swift) default to `autobuild`.
+#
+# The query suite and paths-ignore list are defined centrally below, so
+# changing them here (and cutting a codeql-vX.Y.Z tag) updates every caller.
+
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: "Comma-separated CodeQL languages, e.g. `csharp` or `javascript-typescript`."
+        type: string
+        required: true
+      include-actions:
+        description: "Also scan the caller's GitHub Actions workflows (`actions` language)."
+        type: boolean
+        default: true
+      build-mode:
+        description: "C# build mode: none | autobuild | manual. Other compiled languages use autobuild unless this is manual."
+        type: string
+        default: none
+      build-command:
+        description: "Shell command run between init and analyze when build-mode is manual (e.g. `dotnet build Alloy.Api -c Release`)."
+        type: string
+        default: ""
+      query-suite:
+        description: "CodeQL query suite: default | security-extended | security-and-quality."
+        type: string
+        default: security-extended
+      runs-on:
+        description: "Runner label for the analyze jobs."
+        type: string
+        default: ubuntu-24.04
+      timeout-minutes:
+        description: "Timeout for each analyze job."
+        type: number
+        default: 30
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan languages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.matrix.outputs.include }}
+    steps:
+      - name: Build language matrix
+        id: matrix
+        env:
+          LANGUAGES: ${{ inputs.languages }}
+          INCLUDE_ACTIONS: ${{ inputs.include-actions }}
+          BUILD_MODE: ${{ inputs.build-mode }}
+        run: |
+          set -euo pipefail
+          case "$BUILD_MODE" in none|autobuild|manual) ;; *)
+            echo "::error::build-mode must be none, autobuild or manual (got '$BUILD_MODE')"; exit 1 ;;
+          esac
+          langs="$(printf '%s' "$LANGUAGES" | tr ',' '\n' | tr -d ' ')"
+          if [ "$INCLUDE_ACTIONS" = "true" ]; then langs="$(printf '%s\nactions' "$langs")"; fi
+          include='[]'
+          for lang in $(printf '%s\n' "$langs" | grep -v '^$' | sort -u); do
+            case "$lang" in
+              actions|javascript-typescript|python|ruby|rust) mode=none ;;
+              csharp) mode="$BUILD_MODE" ;;
+              go|java-kotlin|c-cpp|swift) if [ "$BUILD_MODE" = manual ]; then mode=manual; else mode=autobuild; fi ;;
+              *) echo "::error::Unsupported CodeQL language '$lang'"; exit 1 ;;
+            esac
+            include="$(jq -c --arg l "$lang" --arg m "$mode" '. + [{language: $l, "build-mode": $m}]' <<<"$include")"
+          done
+          echo "Matrix: $include"
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: plan
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET (from global.json)
+        if: matrix.language == 'csharp' && matrix.build-mode != 'none'
+        uses: actions/setup-dotnet@v6
+
+      - name: Setup Go (from go.mod)
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: ${{ inputs.query-suite }}
+          config: |
+            paths-ignore:
+              - "**/node_modules/**"
+              - "**/dist/**"
+              - "**/bin/**"
+              - "**/obj/**"
+
+      - name: Build (manual)
+        if: matrix.build-mode == 'manual'
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: |
+          if [ -z "$BUILD_COMMAND" ]; then echo "::error::build-mode manual requires build-command"; exit 1; fi
+          bash -euo pipefail -c "$BUILD_COMMAND"
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
