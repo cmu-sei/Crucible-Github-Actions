@@ -1,0 +1,120 @@
+# Manual release workflow for the per-family action tags.
+#
+# This repository publishes several independent action "families"
+# (docker, header, update-helm-chart, ...). Each family is versioned on
+# its own with tags of the form `<family>-vX.Y.Z`.
+#
+# Dispatching this workflow (from main only) with a family and an X.Y.Z
+# version:
+#   1. refuses to run if `<family>-vX.Y.Z` already exists,
+#   2. creates the annotated tag `<family>-vX.Y.Z` at the dispatched SHA,
+#   3. force-moves the floating tags `<family>-vX` and `<family>-vX.Y`
+#      to the same SHA (consumers pin the floating major),
+#   4. publishes a GitHub Release with notes generated since the previous
+#      `<family>-vX.Y.Z` tag (not another family's Release).
+
+name: Cut release
+
+on:
+  workflow_dispatch:
+    inputs:
+      family:
+        description: Action family to release
+        required: true
+        type: choice
+        options:
+          - docker
+          - header
+          - update-helm-chart
+          - codeql
+          - nuget
+          - npm
+      version:
+        description: Release version (X.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  cut:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: cut-release
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Create and push tags
+        env:
+          FAMILY: ${{ inputs.family }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::cut-release must be dispatched from main (got $GITHUB_REF)"
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$VERSION' must match X.Y.Z (e.g. 1.2.3)"
+            exit 1
+          fi
+
+          TAG="${FAMILY}-v${VERSION}"
+          MAJOR="${VERSION%%.*}"
+          MINOR="$(echo "$VERSION" | cut -d. -f2)"
+
+          # --exit-code: 0 = ref found, 2 = no match, anything else = error.
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null || rc=$?
+          if [[ "$rc" -eq 0 ]]; then
+            echo "::error::Tag $TAG already exists"
+            exit 1
+          elif [[ "$rc" -ne 2 ]]; then
+            echo "::error::git ls-remote failed (exit $rc) while checking for $TAG"
+            exit 1
+          fi
+
+          # Previous patch release of the same family (the greatest
+          # <family>-vX.Y.Z that sorts below $TAG), so generated notes do not
+          # diff against another family's Release or a higher version line.
+          # The glob needs two dots, which excludes the floating vX / vX.Y tags.
+          PREV="$(
+            { git tag --list "${FAMILY}-v[0-9]*.[0-9]*.[0-9]*"; echo "$TAG"; } \
+              | sort -uV \
+              | awk -v t="$TAG" '$0 == t { print p; exit } { p = $0 }'
+          )"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git tag -f "${FAMILY}-v${MAJOR}" "$GITHUB_SHA"
+          git tag -f "${FAMILY}-v${MAJOR}.${MINOR}" "$GITHUB_SHA"
+
+          git push origin "refs/tags/$TAG"
+          git push --force origin \
+            "refs/tags/${FAMILY}-v${MAJOR}" \
+            "refs/tags/${FAMILY}-v${MAJOR}.${MINOR}"
+
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "PREV=$PREV" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --generate-notes --target "$GITHUB_SHA")
+          if [[ -n "$PREV" ]]; then
+            args+=(--notes-start-tag "$PREV")
+          fi
+          gh release create "$TAG" "${args[@]}"
