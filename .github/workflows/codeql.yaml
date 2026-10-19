@@ -31,7 +31,7 @@ on:
         type: string
         default: ""
       query-suite:
-        description: "CodeQL query suite: default | security-extended | security-and-quality."
+        description: "CodeQL query suite: default (CodeQL's default suite; passes no `queries`) | security-extended | security-and-quality | security-experimental."
         type: string
         default: security-extended
       runs-on:
@@ -52,6 +52,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       include: ${{ steps.matrix.outputs.include }}
+      queries: ${{ steps.matrix.outputs.queries }}
     steps:
       - name: Build language matrix
         id: matrix
@@ -59,10 +60,16 @@ jobs:
           LANGUAGES: ${{ inputs.languages }}
           INCLUDE_ACTIONS: ${{ inputs.include-actions }}
           BUILD_MODE: ${{ inputs.build-mode }}
+          QUERY_SUITE: ${{ inputs.query-suite }}
         run: |
           set -euo pipefail
           case "$BUILD_MODE" in none|autobuild|manual) ;; *)
             echo "::error::build-mode must be none, autobuild or manual (got '$BUILD_MODE')"; exit 1 ;;
+          esac
+          case "$QUERY_SUITE" in
+            default) queries="" ;;
+            security-extended|security-and-quality|security-experimental) queries="$QUERY_SUITE" ;;
+            *) echo "::error::query-suite must be default, security-extended, security-and-quality or security-experimental (got '$QUERY_SUITE')"; exit 1 ;;
           esac
           langs="$(printf '%s' "$LANGUAGES" | tr ',' '\n' | tr -d ' ')"
           if [ "$INCLUDE_ACTIONS" = "true" ]; then langs="$(printf '%s\nactions' "$langs")"; fi
@@ -76,8 +83,13 @@ jobs:
             esac
             include="$(jq -c --arg l "$lang" --arg m "$mode" '. + [{language: $l, "build-mode": $m}]' <<<"$include")"
           done
+          if [ "$include" = '[]' ]; then
+            echo "::error::No languages to analyze (languages='$LANGUAGES', include-actions=$INCLUDE_ACTIONS)"; exit 1
+          fi
           echo "Matrix: $include"
+          echo "Queries: ${queries:-<CodeQL default suite>}"
           echo "include=$include" >> "$GITHUB_OUTPUT"
+          echo "queries=$queries" >> "$GITHUB_OUTPUT"
 
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -113,7 +125,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: ${{ inputs.query-suite }}
+          queries: ${{ needs.plan.outputs.queries }}
           config: |
             paths-ignore:
               - "**/node_modules/**"

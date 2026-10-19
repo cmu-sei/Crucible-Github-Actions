@@ -210,7 +210,7 @@ Callers inherit the workflow’s caching, tagging, and push logic without duplic
 - **`plan`** validates `languages` and `build-mode` against an allowlist and builds a matrix of `{language, build-mode}` entries. The `actions` language (the caller's own GitHub Actions workflows) is always added unless `include-actions` is `false`.
 - **`analyze`** runs one job per language: checkout, CodeQL init, an optional manual build, and analysis, uploading results to the repository's **Security → Code scanning** tab under the category `/language:<language>`.
 
-Build modes: interpreted languages (`javascript-typescript`, `python`, `ruby`, `rust`) and `actions` always use `none`. C# defaults to `none` (no build needed); set `build-mode` to `autobuild` or `manual` to analyze a real build instead (the .NET SDK is then installed from the repository's `global.json`). Other compiled languages (`go`, `java-kotlin`, `c-cpp`, `swift`) use `autobuild`, or `manual` when requested; Go also installs the toolchain from `go.mod`.
+Build modes: interpreted languages (`javascript-typescript`, `python`, `ruby`, `rust`) and `actions` always use `none`. C# defaults to `none` (no build needed); set `build-mode` to `autobuild` or `manual` to analyze a real build instead (the .NET SDK is then installed from the repository's `global.json`). Other compiled languages (`go`, `java-kotlin`, `c-cpp`, `swift`) use `autobuild`, or `manual` when requested; Go also installs the toolchain from `go.mod`, which must be at the repository root. `build-mode` applies to every compiled language in a single call, so pass one compiled language per caller (the expected use).
 
 The query suite (default `security-extended`) and the `paths-ignore` list (`**/node_modules/**`, `**/dist/**`, `**/bin/**`, `**/obj/**`) are defined centrally in this workflow, so changing them here and cutting a `codeql` release updates every caller.
 
@@ -222,7 +222,7 @@ The query suite (default `security-extended`) and the `paths-ignore` list (`**/n
 | `include-actions` |  | Also scan the caller's GitHub Actions workflows (`actions` language). | `true` |
 | `build-mode` |  | C# build mode: `none`, `autobuild`, or `manual`. Other compiled languages use `autobuild` unless this is `manual`. | `none` |
 | `build-command` |  | Shell command run between init and analyze when `build-mode` is `manual` (e.g. `dotnet build Alloy.Api -c Release`). Required for `manual`. | `""` |
-| `query-suite` |  | CodeQL query suite: `default`, `security-extended`, or `security-and-quality`. | `security-extended` |
+| `query-suite` |  | CodeQL query suite: `default` (CodeQL's default suite; no `queries` is passed), or one of the named suites `security-extended`, `security-and-quality`, `security-experimental`. Any other value fails the `plan` job. | `security-extended` |
 | `runs-on` |  | Runner label for the analyze jobs. | `ubuntu-24.04` |
 | `timeout-minutes` |  | Timeout for each analyze job. | `30` |
 
@@ -293,6 +293,12 @@ jobs:
 ```
 
 When migrating an existing CodeQL workflow, keep the repo's existing `on:` block; trigger clean-up is a separate effort.
+
+Migration notes:
+
+- CodeQL v4 rejects the old language aliases: callers migrating from `javascript` must use `javascript-typescript`.
+- `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
+- The `actions` scan raises `actions/unpinned-tag` on tag-pinned `uses:` refs, including `@codeql-v1` itself, and that rule is in the default suite too (whether to exclude it via `query-filters` is pending an org decision).
 
 ## Releasing
 
