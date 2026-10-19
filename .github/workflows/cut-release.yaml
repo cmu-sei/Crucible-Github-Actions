@@ -83,11 +83,15 @@ jobs:
             exit 1
           fi
 
-          # Previous patch release of the same family, so generated notes do
-          # not diff against another family's Release. The glob needs two
-          # dots, which excludes the floating vX / vX.Y tags.
-          PREV="$(git tag --list "${FAMILY}-v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname \
-            | grep -vxF "$TAG" | head -n1 || true)"
+          # Previous patch release of the same family (the greatest
+          # <family>-vX.Y.Z that sorts below $TAG), so generated notes do not
+          # diff against another family's Release or a higher version line.
+          # The glob needs two dots, which excludes the floating vX / vX.Y tags.
+          PREV="$(
+            { git tag --list "${FAMILY}-v[0-9]*.[0-9]*.[0-9]*"; echo "$TAG"; } \
+              | sort -uV \
+              | awk -v t="$TAG" '$0 == t { print p; exit } { p = $0 }'
+          )"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
