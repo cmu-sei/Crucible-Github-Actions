@@ -1,0 +1,160 @@
+# Reusable npm package release workflow for Crucible libraries
+# (Crucible.Common.Ui, console-forge).
+#
+# Pipeline shape: one job — validate inputs -> set the version in each
+# package.json -> build -> optionally commit the version bump back to the
+# triggering branch -> npm publish.
+#
+# Authentication: `auth-mode: api-key` (default) publishes with the NPM_TOKEN
+# secret. `auth-mode: trusted` is reserved for npm trusted publishing (OIDC,
+# npm >= 11.5.1; no token). Provenance (`--provenance`, on by default) is
+# separate from trusted publishing and needs `id-token: write` from the caller.
+#
+# `dry-run: true` validates a caller end to end without publishing: the version
+# commit is skipped, `npm publish --dry-run` lists the tarball contents, and
+# no NPM_TOKEN is required.
+
+name: npm Release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Package version (SemVer). A leading 'v' is stripped, so release tag names can be passed directly."
+        type: string
+        required: true
+      dist-tag:
+        description: "npm dist-tag (required by npm for prerelease versions, e.g. next or rc)."
+        type: string
+        default: ""
+      version-dirs:
+        description: "Newline-separated directories whose package.json gets the version (root first)."
+        type: string
+        default: "."
+      build-command:
+        description: "Shell command that installs dependencies and builds the package."
+        type: string
+        default: "npm ci && npm run build"
+      publish-path:
+        description: "Directory or .tgz to publish. `{version}` is replaced with the version."
+        type: string
+        required: true
+      commit-version:
+        description: "Commit the package.json/package-lock.json bump back to the triggering branch."
+        type: boolean
+        default: false
+      provenance:
+        description: "Publish with npm provenance (caller must grant id-token: write)."
+        type: boolean
+        default: true
+      node-version:
+        description: "Node.js version for actions/setup-node."
+        type: string
+        default: "24"
+      auth-mode:
+        description: "api-key (NPM_TOKEN secret) or trusted (npm trusted publishing)."
+        type: string
+        default: api-key
+      dry-run:
+        description: "Run npm publish --dry-run and skip the version commit. Use to validate a caller."
+        type: boolean
+        default: false
+    secrets:
+      NPM_TOKEN:
+        description: "npm automation/granular token (auth-mode: api-key)."
+        required: false
+
+# The maximum this workflow may use. A called workflow's token is capped by the
+# caller's grant, so callers grant only what they use: `contents: read` (or
+# `contents: write` with commit-version) plus `id-token: write` for provenance.
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: npm-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ inputs.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+          AUTH_MODE: ${{ inputs.auth-mode }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          [[ "$VERSION" =~ $semver ]] || { echo "::error::'$VERSION' is not a SemVer version"; exit 1; }
+          [[ -z "$DIST_TAG" || "$DIST_TAG" =~ ^[a-z][a-z0-9._-]*$ ]] || { echo "::error::invalid dist-tag '$DIST_TAG'"; exit 1; }
+          [[ "$AUTH_MODE" =~ ^(api-key|trusted)$ ]] || { echo "::error::auth-mode must be api-key or trusted"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: ${{ inputs.commit-version && !inputs.dry-run }}
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Set package version
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          VERSION_DIRS: ${{ inputs.version-dirs }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+            echo "Setting version $VERSION in $dir/package.json"
+            (cd "$dir" && npm version --allow-same-version --no-git-tag-version "$VERSION")
+          done <<< "$VERSION_DIRS"
+
+      - name: Build
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$BUILD_COMMAND"
+
+      - name: Commit version bump
+        if: inputs.commit-version && !inputs.dry-run
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- '*package.json' '*package-lock.json'
+          if git diff --cached --quiet; then echo "Already at $VERSION"; exit 0; fi
+          git commit -m "Update version number to $VERSION"
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+      - name: Publish
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          PUBLISH_PATH: ${{ inputs.publish-path }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+          PROVENANCE: ${{ inputs.provenance }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          AUTH_MODE: ${{ inputs.auth-mode }}
+          NODE_AUTH_TOKEN: ${{ inputs.auth-mode == 'api-key' && secrets.NPM_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          # A dry run never contacts the registry for auth, so no token is needed.
+          if [ "$DRY_RUN" != "true" ] && [ "$AUTH_MODE" = api-key ] && [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::auth-mode api-key requires the NPM_TOKEN secret"; exit 1
+          fi
+          args=(--access public)
+          if [ -n "$DIST_TAG" ]; then args+=(--tag "$DIST_TAG"); fi
+          if [ "$PROVENANCE" = "true" ]; then args+=(--provenance); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          npm publish "${PUBLISH_PATH//\{version\}/$VERSION}" "${args[@]}"
