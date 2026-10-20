@@ -1,0 +1,183 @@
+# Automatic patch releases for the per-family action tags.
+#
+# Every merge to main that changes a family's files cuts that family's next
+# release (via cut-release.yaml), so the floating `<family>-vX` and
+# `<family>-vX.Y` tags move without a human dispatching a release. The bump
+# is PATCH unless a commit touching the family since its latest tag carries
+# a marker (case-insensitive, anywhere in the message; squash merges carry
+# the PR title): `[release:minor]`, `[release:major]`, or `[release:skip]`
+# (hold for a manual `Cut release`). Several markers: skip > major > minor.
+#
+# The plan is idempotent: each family's files are compared against its
+# latest `<family>-vX.Y.Z` tag, and only families with changes are released.
+# Families with no patch tag yet are skipped (cut the first release by hand).
+#
+# Runs on every push to main, including Dependabot auto-merges (those are
+# performed with the crucible-ci App token, so they trigger `push`). A manual
+# dispatch with `dry-run` reports what would be released without cutting.
+
+name: Auto release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report what would be released without cutting anything
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Not the `cut-release` group: the called cut job already takes that group
+# (serializing against manual cuts), and a caller holding the same group
+# as its called job is cancelled by GitHub as a concurrency deadlock.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan patch releases
+        id: plan
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry-run }}
+        run: |
+          set -euo pipefail
+
+          # family|space-separated paths|space-separated excluded paths
+          families=(
+            "docker|.github/workflows/docker-build.yaml|"
+            "header|actions/header|"
+            "update-helm-chart|actions/update-helm-chart|actions/update-helm-chart/tests actions/update-helm-chart/requirements-dev.txt"
+            "codeql|.github/workflows/codeql.yaml|"
+            "nuget|.github/workflows/nuget-release.yaml .github/workflows/nuget-relist.yaml|"
+            "npm|.github/workflows/npm-release.yaml|"
+          )
+
+          include='[]'
+          summary="| Family | Latest tag | Decision | Bump | Next version |"$'\n'"| --- | --- | --- | --- | --- |"$'\n'
+
+          for entry in "${families[@]}"; do
+            IFS='|' read -r family paths excludes <<<"$entry"
+            read -ra path_list <<<"$paths"
+            read -ra exclude_list <<<"$excludes"
+
+            present=false
+            for p in "${path_list[@]}"; do
+              if [[ -e "$p" ]]; then present=true; fi
+            done
+            if [[ "$present" != true ]]; then
+              summary+="| \`$family\` | - | skip (no files) | - | - |"$'\n'
+              continue
+            fi
+
+            latest="$(git tag --list "${family}-v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n1)"
+            if [[ -z "$latest" ]]; then
+              echo "::notice::$family has no release yet; cut the first one manually"
+              summary+="| \`$family\` | - | skip (no release yet; cut the first one manually) | - | - |"$'\n'
+              continue
+            fi
+
+            pathspec=("${path_list[@]}")
+            for x in "${exclude_list[@]}"; do
+              pathspec+=(":(exclude)$x")
+            done
+
+            if git diff --quiet "$latest" HEAD -- "${pathspec[@]}"; then
+              summary+="| \`$family\` | \`$latest\` | unchanged | - | - |"$'\n'
+              continue
+            fi
+
+            current="${latest#"${family}-v"}"
+            if [[ ! "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "::error::Cannot parse version from tag $latest"
+              exit 1
+            fi
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+
+            # Highest-impact marker across the family's commits since the tag:
+            # skip > major > minor > patch (default).
+            bump="patch"
+            reason="patch (default)"
+            rank=0
+            while read -r sha; do
+              msg="$(git log -1 --format=%B "$sha")"
+              short="$(git rev-parse --short "$sha")"
+              for m in skip major minor; do
+                case "$m" in skip) r=3 ;; major) r=2 ;; minor) r=1 ;; esac
+                if [[ "$r" -gt "$rank" ]] && grep -qiF "[release:$m]" <<<"$msg"; then
+                  bump="$m"
+                  rank="$r"
+                  reason="$m ([release:$m] in $short)"
+                fi
+              done
+            done < <(git rev-list "$latest..HEAD" -- "${pathspec[@]}")
+
+            case "$bump" in
+              skip)
+                echo "::notice::$family release held by $reason; a manual Cut release is expected"
+                summary+="| \`$family\` | \`$latest\` | skip (held) | $reason | - |"$'\n'
+                continue
+                ;;
+              major) next="$((major + 1)).0.0" ;;
+              minor) next="${major}.$((minor + 1)).0" ;;
+              *) next="${major}.${minor}.$((patch + 1))" ;;
+            esac
+
+            summary+="| \`$family\` | \`$latest\` | release | $reason | \`$next\` |"$'\n'
+            include="$(jq -c --arg f "$family" --arg v "$next" '. + [{family: $f, version: $v}]' <<<"$include")"
+          done
+
+          count="$(jq 'length' <<<"$include")"
+          matrix="$(jq -c '{include: .}' <<<"$include")"
+
+          {
+            echo "## Auto release plan"
+            echo
+            if [[ "${DRY_RUN:-}" == "true" ]]; then
+              echo "**Dry run** - nothing will be released."
+              echo
+            fi
+            printf '%s' "$summary"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Planned $count release(s): $matrix"
+
+  release:
+    name: Release ${{ matrix.family }} ${{ matrix.version }}
+    needs: plan
+    # inputs.dry-run is empty on push, so only a literal 'true'
+    # from a manual dispatch suppresses the release.
+    if: needs.plan.outputs.count != '0' && github.event.inputs.dry-run != 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/cut-release.yaml
+    with:
+      family: ${{ matrix.family }}
+      version: ${{ matrix.version }}
