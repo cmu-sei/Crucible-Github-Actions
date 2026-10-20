@@ -12,17 +12,15 @@
 # latest `<family>-vX.Y.Z` tag, and only families with changes are released.
 # Families with no patch tag yet are skipped (cut the first release by hand).
 #
-# The schedule exists because merges performed with GITHUB_TOKEN (e.g. the
-# Dependabot auto-merge) do not trigger `push` workflows; the next scheduled
-# run picks those changes up.
+# Runs on every push to main, including Dependabot auto-merges (those are
+# performed with the crucible-ci App token, so they trigger `push`). A manual
+# dispatch with `dry-run` reports what would be released without cutting.
 
 name: Auto release
 
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       dry-run:
@@ -170,7 +168,7 @@ jobs:
   release:
     name: Release ${{ matrix.family }} ${{ matrix.version }}
     needs: plan
-    # inputs.dry-run is empty on push/schedule, so only a literal 'true'
+    # inputs.dry-run is empty on push, so only a literal 'true'
     # from a manual dispatch suppresses the release.
     if: needs.plan.outputs.count != '0' && github.event.inputs.dry-run != 'true'
     strategy:
