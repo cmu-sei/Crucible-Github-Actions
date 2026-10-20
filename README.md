@@ -489,8 +489,8 @@ To validate a new caller without credentials, add `dry-run: true` under `with:` 
 
 | Repository | `project` | `openapi-project` | Notes |
 | --- | --- | --- | --- |
-| alloy.api | `Alloy.Api.Client/Alloy.Api.Client.csproj` | `Alloy.Api` | Set `nswag.json` `runtime` to `Net100` and bump `nswag` to 14.x in the client `package.json`; align the Swashbuckle CLI in `Alloy.Api/.config/dotnet-tools.json` with the API's Swashbuckle version. |
-| blueprint.api | `Blueprint.Api.Client/Blueprint.Api.Client.csproj` | `Blueprint.Api` | Same `nswag.json` / `nswag` 14.x changes as alloy.api. |
+| alloy.api | `Alloy.Api.Client/Alloy.Api.Client.csproj` | `Alloy.Api` | Set `nswag.json` `runtime` to `Net100`, bump `nswag` to 14.x in the client `package.json` (commit a `package-lock.json`), bump the client's `System.Text.Json` to 10.0.0 (NSwag 14 emits `JsonStringEnumConverter<T>`), and bump `swashbuckle.aspnetcore.cli` in `Alloy.Api/.config/dotnet-tools.json` from 6.8.1 to the API's Swashbuckle version (10.1.0). |
+| blueprint.api | `Blueprint.Api.Client/Blueprint.Api.Client.csproj` | `Blueprint.Api` | Same `nswag.json` runtime / `nswag` 14.x changes as alloy.api (`System.Text.Json` is already 10.0.0 via `Directory.Packages.props`). The repository has no `dotnet-tools.json`: add one (root or `Blueprint.Api/.config/`) with `swashbuckle.aspnetcore.cli` at the API's Swashbuckle version (10.0.1). |
 | cite.api | `Cite.Api.Client/Cite.Api.Client.csproj` | `Cite.Api` | |
 | gallery.api | `Gallery.Api.Client/Gallery.Api.Client.csproj` | `Gallery.Api` | |
 | steamfitter.api | `Steamfitter.Api.Client/Steamfitter.Api.Client.csproj` | `Steamfitter.Api` | |
