@@ -306,12 +306,12 @@ Callers can add repository-specific exclusions; they are appended to (never repl
     with:
       languages: csharp
       paths-ignore: |
-        Alloy.Api.Client/**
         **/Migrations/**
+        **/*.Tests/**
       exclude-queries: cs/log-forging
 ```
 
-For interpreted languages and `build-mode: none`, `paths-ignore` removes the matching files from analysis entirely. For traced builds (`autobuild` / `manual`) CodeQL still extracts every compiled file, so `paths-ignore` only filters alerts in those paths out of the results. `exclude-queries` drops the listed queries' results for every language in the call. Central exclusions cannot be removed by callers.
+For interpreted languages and `build-mode: none`, `paths-ignore` removes the matching files from analysis entirely. For traced builds (`autobuild` / `manual`) CodeQL still extracts every compiled file, so `paths-ignore` only filters alerts in those paths out of the results. Paths that only exist after a build (for example NSwag-generated client code) are therefore only worth excluding under `build-mode: autobuild` or `manual`; with the default `none` they are never scanned in the first place. `exclude-queries` drops the listed queries' results for every language in the call. Central exclusions cannot be removed by callers.
 
 Migration notes:
 
