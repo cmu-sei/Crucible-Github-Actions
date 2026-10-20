@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Tests the input validation of the shared NuGet workflows by extracting the
+# Tests the input validation of the shared NuGet workflows (and the Pack
+# step's MSBuild escaping of `description`) by extracting the
 # `run:` body of the `validate` step from .github/workflows/nuget-release.yaml
 # and .github/workflows/nuget-relist.yaml and running it locally against a
 # temporary GITHUB_OUTPUT file.
@@ -55,8 +56,14 @@ check "release: 1.2.3 -> version=1.2.3" t
 t() { run_step release "${ok_env[@]}" VERSION=v2.0.0-rc.1; [ "$rc" = 0 ] && [ "$(out_val version)" = 2.0.0-rc.1 ]; }
 check "release: v2.0.0-rc.1 -> leading v stripped" t
 
-t() { run_step release "${ok_env[@]}" VERSION='1.2.3;id'; [ "$rc" = 1 ] && grep -q "is not a SemVer version" "$ERR" && [ ! -s "$OUT" ]; }
+t() { run_step release "${ok_env[@]}" VERSION='1.2.3;id'; [ "$rc" = 1 ] && grep -q "is not a valid SemVer version" "$ERR" && [ ! -s "$OUT" ]; }
 check "release: '1.2.3;id' rejected" t
+
+t() { run_step release "${ok_env[@]}" VERSION=$'1.2.3\n::warning::injected'; [ "$rc" = 1 ] && ! grep -q 'injected' "$ERR" && [ ! -s "$OUT" ]; }
+check "release: error message does not echo the raw input" t
+
+t() { run_step release "${ok_env[@]}" VERSION=1.2.3+abc; [ "$rc" = 1 ] && grep -q "build metadata (+...) is not supported" "$ERR" && [ ! -s "$OUT" ]; }
+check "release: build metadata (1.2.3+abc) rejected" t
 
 t() { run_step release "${ok_env[@]}" VERSION='$(id)'; [ "$rc" = 1 ] && ! grep -q 'uid=' "$ERR" && [ ! -s "$OUT" ]; }
 check "release: '\$(id)' rejected, not executed" t
@@ -76,6 +83,19 @@ check "release: invalid github-release rejected" t
 t() { run_step release VERSION=1.2.3 AUTH_MODE=trusted GITHUB_RELEASE=tag; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
 check "release: trusted + tag accepted" t
 
+# ---- nuget-release.yaml: Pack description escaping ----
+# The Pack step is not runnable locally; extract its escaping line and check
+# that ';' / ',' / '%' are MSBuild-escaped (%3B / %2C / %25).
+grep -E '^ *d="\$\{DESCRIPTION' <(extract_step "$ROOT/.github/workflows/nuget-release.yaml" pack) | sed 's/^ *//' > "$TMP/escape.sh"
+echo 'printf "%s" "$d" > "$GITHUB_OUTPUT"' >> "$TMP/escape.sh"
+t() { run_step escape DESCRIPTION="Client, generated; for 100% of Alloy"
+  [ "$rc" = 0 ] && [ "$(cat "$OUT")" = "Client%2C generated%3B for 100%25 of Alloy" ]; }
+check "pack: description escaped for MSBuild -p:" t
+
+t() { run_step escape DESCRIPTION="NSwag generated client for Crucible's Alloy.Api"
+  [ "$rc" = 0 ] && [ "$(cat "$OUT")" = "NSwag generated client for Crucible's Alloy.Api" ]; }
+check "pack: plain description unchanged" t
+
 # ---- nuget-relist.yaml: Validate inputs ----
 t() { run_step relist PACKAGE_ID=Alloy.Api.Client VERSION=v1.2.3
   [ "$rc" = 0 ] && [ "$(out_val package_id)" = Alloy.Api.Client ] && [ "$(out_val version)" = 1.2.3 ]; }
@@ -86,6 +106,9 @@ check "relist: package id 'x;y' rejected" t
 
 t() { run_step relist PACKAGE_ID=Alloy.Api.Client VERSION='1.2.3;id'; [ "$rc" = 1 ] && [ ! -s "$OUT" ]; }
 check "relist: version '1.2.3;id' rejected" t
+
+t() { run_step relist PACKAGE_ID=$'x\n::warning::injected' VERSION=1.2.3; [ "$rc" = 1 ] && ! grep -q 'injected' "$ERR"; }
+check "relist: error message does not echo the raw input" t
 
 echo "----"
 echo "$pass passed, $fail failed"

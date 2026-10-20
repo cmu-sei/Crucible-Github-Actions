@@ -122,11 +122,14 @@ jobs:
           VERSION: ${{ inputs.version }}
           AUTH_MODE: ${{ inputs.auth-mode }}
           GITHUB_RELEASE: ${{ inputs.github-release }}
+        # Error messages never echo the raw input (a newline in it could
+        # inject workflow commands).
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}"
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-          [[ "$VERSION" =~ $semver ]] || { echo "::error::'$VERSION' is not a SemVer version"; exit 1; }
+          [[ "$VERSION" =~ $semver ]] || { echo "::error::Version input is not a valid SemVer version (expected like 1.2.3 or 1.2.3-rc.1)"; exit 1; }
+          [[ "$VERSION" != *+* ]] || { echo "::error::build metadata (+...) is not supported: NuGet drops it from the package file name"; exit 1; }
           [[ "$AUTH_MODE" =~ ^(api-key|trusted)$ ]] || { echo "::error::auth-mode must be api-key or trusted"; exit 1; }
           [[ "$GITHUB_RELEASE" =~ ^(release|tag|none)$ ]] || { echo "::error::github-release must be release, tag or none"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -150,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           package_id="$(dotnet msbuild "$PROJECT" -getProperty:PackageId)"
-          [ -n "$package_id" ] || { echo "::error::Could not read PackageId from $PROJECT"; exit 1; }
+          [ -n "$package_id" ] || { echo "::error::Could not read PackageId from the project input"; exit 1; }
           tag="${RELEASE_TAG:-$package_id.$VERSION}"
           echo "PackageId: $package_id; version: $VERSION; release tag: $tag"
           {
@@ -164,6 +167,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          package-manager-cache: false   # release job: no restored caches
 
       - name: Generate OpenAPI client
         if: inputs.openapi-project != ''
@@ -181,6 +185,7 @@ jobs:
           (cd "$API_DIR" && dotnet tool restore)
           dotnet build "$API_DIR" -c Release -p:Version="$VERSION"
           dll="$(find "$API_DIR/bin/Release" -name "$API_ASSEMBLY.dll" -print -quit)"
+          [ -n "$dll" ] || { echo "::error::Could not find the API assembly (openapi-assembly).dll under openapi-project's bin/Release; did the build succeed?"; exit 1; }
           (cd "$API_DIR" && dotnet swagger tofile --output "$GITHUB_WORKSPACE/$CLIENT_DIR/$OUT" "$GITHUB_WORKSPACE/$dll" "$DOC")
           cd "$CLIENT_DIR"
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
@@ -189,6 +194,7 @@ jobs:
           # another), so pass the document's own runtime explicitly; it then
           # can't drift from nswag.json.
           runtime="$(node -p 'require("./nswag.json").runtime || ""')"
+          [ -z "$runtime" ] || [[ "$runtime" =~ ^Net[0-9]+$ ]] || { echo "::error::nswag.json runtime must look like Net100"; exit 1; }
           if [ -n "$runtime" ]; then
             npx --no-install nswag run "/runtime:$runtime"
           else
@@ -196,6 +202,7 @@ jobs:
           fi
 
       - name: Pack
+        id: pack
         env:
           PROJECT: ${{ inputs.project }}
           VERSION: ${{ steps.validate.outputs.version }}
@@ -212,7 +219,12 @@ jobs:
             -p:PackageProjectUrl=https://github.com/cmu-sei/crucible
             -p:RepositoryType=git -p:RepositoryUrl="$REPO_URL"
             -p:RepositoryCommit="$GITHUB_SHA")
-          if [ -n "$DESCRIPTION" ]; then args+=(-p:Description="$DESCRIPTION"); fi
+          if [ -n "$DESCRIPTION" ]; then
+            # MSBuild splits -p: values on ';' and ',' and un-escapes %XX, so
+            # escape '%' first, then ';' and ','.
+            d="${DESCRIPTION//\%/%25}"; d="${d//;/%3B}"; d="${d//,/%2C}"
+            args+=(-p:Description="$d")
+          fi
           if [ "$SYMBOLS" = "true" ]; then args+=(-p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg); fi
           dotnet pack "$PROJECT" "${args[@]}"
           ls -l artifacts

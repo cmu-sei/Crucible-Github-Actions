@@ -356,6 +356,9 @@ Behaviour the callers rely on:
 - `dotnet tool restore` runs **inside** `openapi-project`, so a `.config/dotnet-tools.json` either there or at the repository root works. The Swashbuckle CLI version in that manifest (`swashbuckle.aspnetcore.cli`) must match the API's `Swashbuckle.AspNetCore` package version.
 - NSwag runs **inside** the client project's directory via `npx --no-install nswag run`, so that directory needs a `package.json` declaring `nswag` (`npm ci` is used when a `package-lock.json` is present, `npm install` otherwise), and `nswag.json` must set `"runtime": "Net100"` (NSwag 14.x).
 - The release tag defaults to `<PackageId>.<version>` (for example `Alloy.Api.Client.1.2.3`), the format the API repositories already use.
+- Versions with SemVer build metadata (`1.2.3+abc`) are rejected: NuGet drops the metadata from the package file name.
+- Runs are serialized per caller repository and `project` (concurrency group, `cancel-in-progress: false`). GitHub still cancels an older *pending* run in the same group when a newer one queues, so dispatch releases of the same project one at a time.
+- `description` may contain `,` and `;` (escaped for MSBuild before `dotnet pack`).
 
 #### Inputs
 
@@ -482,6 +485,8 @@ jobs:
     secrets:
       NUGET_APIKEY: ${{ secrets.NUGET_APIKEY }}
 ```
+
+In the library example, `release-tag` is built from the raw `versionNumber` input, so give `versionNumber` without a leading `v` (otherwise the tag carries it); the shared workflow normalizes `version` itself (strips a leading `v`), but not a caller-built `release-tag`.
 
 To validate a new caller without credentials, add `dry-run: true` under `with:` and dispatch it once; the packed `.nupkg` is uploaded as a run artifact.
 

@@ -41,12 +41,14 @@ jobs:
         env:
           PACKAGE_ID: ${{ inputs.package-id }}
           VERSION: ${{ inputs.version }}
+        # Error messages never echo the raw input (a newline in it could
+        # inject workflow commands).
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}"
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-          [[ "$PACKAGE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::'$PACKAGE_ID' is not a valid NuGet package id"; exit 1; }
-          [[ "$VERSION" =~ $semver ]] || { echo "::error::'$VERSION' is not a SemVer version"; exit 1; }
+          [[ "$PACKAGE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::package-id input is not a valid NuGet package id (expected like Alloy.Api.Client)"; exit 1; }
+          [[ "$VERSION" =~ $semver ]] || { echo "::error::Version input is not a valid SemVer version (expected like 1.2.3 or 1.2.3-rc.1)"; exit 1; }
           echo "package_id=$PACKAGE_ID" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -58,6 +60,8 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$NUGET_API_KEY" ] || { echo "::error::NUGET_APIKEY_UNLIST is empty"; exit 1; }
-          curl --fail-with-body -sS -X POST -H "Content-Length: 0" -H "X-NuGet-ApiKey: $NUGET_API_KEY" \
-            "https://www.nuget.org/api/v2/package/$PACKAGE_ID/$VERSION"
+          # The key is fed to curl on stdin (-H @-) so it never appears in argv.
+          printf 'X-NuGet-ApiKey: %s\n' "$NUGET_API_KEY" |
+            curl --fail-with-body -sS -X POST -H "Content-Length: 0" -H @- \
+              "https://www.nuget.org/api/v2/package/$PACKAGE_ID/$VERSION"
           echo "Relisted $PACKAGE_ID $VERSION"
