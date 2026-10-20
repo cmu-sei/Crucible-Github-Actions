@@ -5,7 +5,8 @@
 # its own with tags of the form `<family>-vX.Y.Z`.
 #
 # Dispatching this workflow (from main only) with a family and an X.Y.Z
-# version:
+# version -- or calling it from another workflow running on main, as
+# auto-release.yaml does for patch releases:
 #   1. refuses to run if `<family>-vX.Y.Z` already exists,
 #   2. creates the annotated tag `<family>-vX.Y.Z` at the dispatched SHA,
 #   3. force-moves the floating tags `<family>-vX` and `<family>-vX.Y`
@@ -29,6 +30,16 @@ on:
           - codeql
           - nuget
           - npm
+      version:
+        description: Release version (X.Y.Z)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      family:
+        description: Action family to release
+        required: true
+        type: string
       version:
         description: Release version (X.Y.Z)
         required: true
@@ -62,6 +73,15 @@ jobs:
             echo "::error::cut-release must be dispatched from main (got $GITHUB_REF)"
             exit 1
           fi
+
+          # workflow_call inputs have no choice type, so re-check the family.
+          case "$FAMILY" in
+            docker|header|update-helm-chart|codeql|nuget|npm) ;;
+            *)
+              echo "::error::Unknown family '$FAMILY'"
+              exit 1
+              ;;
+          esac
 
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Version '$VERSION' must match X.Y.Z (e.g. 1.2.3)"
