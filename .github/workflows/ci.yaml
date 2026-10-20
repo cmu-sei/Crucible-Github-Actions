@@ -1,15 +1,15 @@
 # Continuous integration for this repository.
 #
 # - actionlint: lints every workflow and composite action (with shellcheck on
-#   `run:` scripts). The actionlint binary is pinned by version and verified
-#   against the release's published SHA-256 checksums before it is run.
+#   `run:` scripts). The actionlint binary is pinned by version and by an
+#   inline SHA-256 of the release tarball, verified before it is run.
 # - codeql-plan-tests: runs tests/codeql-plan.test.sh against the plan job of
 #   .github/workflows/codeql.yaml.
 # - update-helm-chart-tests: runs the pytest suite of actions/update-helm-chart.
 #
-# These job names (`CI / actionlint`, `CI / codeql-plan-tests`,
-# `CI / update-helm-chart-tests`) are the ones the `main` ruleset should list
-# as required status checks.
+# The job names `actionlint`, `codeql-plan-tests` and `update-helm-chart-tests`
+# are the status-check contexts the `main` ruleset should list as required
+# (the context is the job name, not `<workflow> / <job>`).
 
 name: CI
 
@@ -35,8 +35,11 @@ jobs:
           persist-credentials: false
 
       - name: Download actionlint
+        # To update: bump ACTIONLINT_VERSION and set ACTIONLINT_SHA256 to the
+        # linux_amd64 tarball line of that release's actionlint_<ver>_checksums.txt.
         env:
           ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
         run: |
           set -euo pipefail
           base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
@@ -44,8 +47,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/actionlint"
           cd "$RUNNER_TEMP/actionlint"
           curl -fsSL -o "$tarball" "$base/$tarball"
-          curl -fsSL -o checksums.txt "$base/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
-          sha256sum --check --ignore-missing --strict checksums.txt
+          echo "$ACTIONLINT_SHA256  $tarball" | sha256sum --check --strict
           tar xzf "$tarball" actionlint
           echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
 

@@ -323,19 +323,23 @@ Migration notes:
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows and composite actions, `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
-The `main` ruleset should list these as required status checks: `CI / actionlint`, `CI / codeql-plan-tests`, `CI / update-helm-chart-tests`, plus the `CodeQL` analysis jobs.
+The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
 ## Dependabot
 
 `.github/dependabot.yml` checks the GitHub Actions used by the workflows and composite actions weekly and groups all updates into one pull request.
 
-`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot minor and patch updates; major updates are left for manual review. It never checks out code. It depends on these repository settings:
+`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot minor and patch updates; major updates are left for manual review. It never checks out code. It depends on these repository settings, configured in this order:
 
-- "Allow auto-merge" enabled.
-- "Allow GitHub Actions to create and approve pull requests" enabled.
-- Required status checks on `main` (see [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
+1. Required status checks on `main` (the contexts listed in [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
+2. "Allow auto-merge" enabled.
+3. "Allow GitHub Actions to create and approve pull requests" enabled.
+
+Configure the required status checks **before** enabling the other two settings: otherwise the bot's approval satisfies the one-review rule and an auto-merge PR can merge before CI finishes.
+
+The merge is performed with `GITHUB_TOKEN`, which does not trigger `push: main` workflows, so CI and CodeQL do not re-run on `main` after an auto-merge; the pull-request checks are the gate.
 
 An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
 

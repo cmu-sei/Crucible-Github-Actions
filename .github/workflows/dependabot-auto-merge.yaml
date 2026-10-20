@@ -9,13 +9,17 @@
 # This workflow never checks out code, so nothing from the pull request is
 # executed; it only reads Dependabot's metadata and calls the GitHub API.
 #
-# Depends on these repository settings:
-# - "Allow auto-merge" enabled.
-# - "Allow GitHub Actions to create and approve pull requests" enabled.
-# - Required status checks on `main` (the CI and CodeQL jobs), so auto-merge
-#   waits for CI to pass instead of merging immediately.
+# Depends on these repository settings, configured in this order:
+# 1. Required status checks on `main` (actionlint, codeql-plan-tests,
+#    update-helm-chart-tests, codeql / Plan languages,
+#    codeql / Analyze (python), codeql / Analyze (actions)), so auto-merge
+#    waits for CI to pass.
+# 2. "Allow auto-merge" enabled.
+# 3. "Allow GitHub Actions to create and approve pull requests" enabled.
 # If auto-merge is disabled the merge step fails on purpose so the
-# misconfiguration is visible.
+# misconfiguration is visible. If auto-merge is enabled but no required
+# checks are configured, the bot's approval satisfies the review rule and the
+# merge can proceed immediately, before CI finishes; hence the order above.
 
 name: Dependabot auto-merge
 
