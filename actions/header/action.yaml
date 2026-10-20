@@ -18,6 +18,7 @@ runs:
     - uses: actions/checkout@v7
       with:
         ref: ${{ github.head_ref }}
+        token: ${{ inputs.github_token }}
 
     - uses: actions/setup-python@v7
       with:
@@ -25,8 +26,9 @@ runs:
         architecture: "x64"
 
     - name: Check for and Add Headers
-      run: |
-        python ${{ github.action_path }}/header.py ${{ inputs.use_block_comments }}
+      run: python "$GITHUB_ACTION_PATH/header.py" "$USE_BLOCK_COMMENTS"
+      env:
+        USE_BLOCK_COMMENTS: ${{ inputs.use_block_comments }}
       shell: bash
 
     - name: Git Diff
@@ -47,7 +49,7 @@ runs:
 
     - name: Push changes
       if: env.FILESCHANGED == 'TRUE'
-      uses: ad-m/github-push-action@v1.3.0
-      with:
-        github_token: ${{ inputs.github_token }}
-        branch: ${{ github.head_ref }}
+      run: git push origin "HEAD:refs/heads/$HEAD_REF"
+      env:
+        HEAD_REF: ${{ github.head_ref }}
+      shell: bash

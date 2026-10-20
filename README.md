@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Update Helm chart
-        uses: cmu-sei/Crucible-Github-Actions/actions/update-helm-chart@main
+        uses: cmu-sei/Crucible-Github-Actions/actions/update-helm-chart@update-helm-chart-v3
         with:
           app_name: TopoMojo API
           github_app_client_id: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
@@ -110,7 +110,7 @@ jobs:
    - Alternative: use a fine-grained PAT limited to the Helm charts repo and store as `HELM_CHARTS_TOKEN`; pass it via the optional `helm_repo_token` input.
 2. **Add the workflow** (example above) to the application repository.
    - Trigger on `release` with `types: [published]`.
-3. **Reference the action** with a tagged version or commit SHA.
+3. **Reference the action** by pinning the floating major tag (e.g. `update-helm-chart-v3`).
 4. **Provide chart paths** that match the structure in `cmu-sei/helm-charts`.
    - `chart_file` must point at the child chart’s `Chart.yaml`.
    - `parent_chart_file` should list any umbrella chart `Chart.yaml` files that need a version bump.
@@ -137,7 +137,7 @@ jobs:
   headers:
     runs-on: ubuntu-latest
     steps:
-      - uses: cmu-sei/crucible-github-actions/actions/header@v1
+      - uses: cmu-sei/Crucible-Github-Actions/actions/header@header-v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           use_block_comments: false
@@ -179,7 +179,7 @@ Matched files are logged as `skipping (ignored): <path>` and left untouched. Whe
 | `versionMode` |  | How to inject version at build time: `none` (default), `npm`, or `csproj`. |
 | `versionFiles` |  | Newline-separated file paths to update (used by `npm` mode to set version in `package.json` files before build). |
 | `buildArgs` |  | Optional Docker build args (newline-separated `key=value`). |
-| `enableQemu` |  | Set to `true` to enable QEMU for multi-arch builds. Defaults to `false`. |
+| `platforms` |  | Comma-separated target platforms; default `linux/amd64,linux/arm64`. |
 | `preBuildCommands` |  | Optional shell commands to run before the Docker build (e.g., fetch artifacts). |
 
 #### Required Secrets
@@ -192,7 +192,7 @@ Matched files are logged as `skipping (ignored): <path>` and left untouched. Whe
 ```yaml
 jobs:
   docker:
-    uses: cmu-sei/crucible-github-actions/.github/workflows/docker-build.yaml@v1
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/docker-build.yaml@docker-v1
     with:
       imageName: cmusei/topomojo-api
       additionalTarget: worker
@@ -211,12 +211,14 @@ Each action family in this repository is versioned independently. Releases are t
 | --- | --- | --- |
 | `docker` | `.github/workflows/docker-build.yaml` | `docker-v1.1.7` |
 | `header` | Header Check composite action | `header-v1.0.1` |
-| `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.1.0` |
+| `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.2.0` |
 | `codeql`, `nuget`, `npm` | Reserved for upcoming families | `codeql-v1.0.0` |
+
+Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 
 Every release produces three tags, all pointing at the same commit:
 
-- `<family>-vX.Y.Z` — immutable, annotated release tag (a GitHub Release is published for it).
+- `<family>-vX.Y.Z` — annotated release tag, never moved by this workflow (a GitHub Release is published for it).
 - `<family>-vX.Y` — floating minor tag, force-moved to the latest patch.
 - `<family>-vX` — floating major tag, force-moved to the latest minor/patch.
 

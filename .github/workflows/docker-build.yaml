@@ -65,15 +65,20 @@ on:
       DOCKERHUB_PASSWORD:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   prepare:
     name: Prepare build matrix
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       push: ${{ steps.push_condition.outputs.push }}
       needs_merge: ${{ steps.push_condition.outputs.needs_merge }}
       has_additional_target: ${{ steps.flags.outputs.has_additional_target }}
+      image_slug: ${{ steps.image_slug.outputs.image_slug }}
     steps:
       - name: Determine push condition
         id: push_condition
@@ -116,6 +121,16 @@ jobs:
           fi
         env:
           INPUT_ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
+
+      # Slug of the image name, used to key the buildx cache so multiple
+      # images built from one repo do not overwrite each other's cache.
+      - name: Compute image slug
+        id: image_slug
+        run: |
+          set -euo pipefail
+          echo "image_slug=$(printf '%s' "$IMAGE_NAME" | tr '/:' '--')" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_NAME: ${{ inputs.imageName }}
 
       # Emits a JSON matrix mapping each requested platform to its native
       # runner label. Centralizing the mapping here is the only place to
@@ -163,6 +178,7 @@ jobs:
     name: Build ${{ matrix.platform }}
     needs: prepare
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -294,8 +310,8 @@ jobs:
           outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha,scope=${{ matrix.safe }}-default
-          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
 
       - name: Build (no push) default stage
         if: needs.prepare.outputs.push != 'true'
@@ -308,8 +324,8 @@ jobs:
           push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha,scope=${{ matrix.safe }}-default
-          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-default
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
 
       # Write the digest as an empty file whose *name* is the sha256.
       # The merge job doesn't need the contents -- just the list of
@@ -352,8 +368,8 @@ jobs:
           outputs: type=image,name=${{ inputs.imageName }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha,scope=${{ matrix.safe }}-additional
-          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-additional
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-additional
 
       - name: Build (no push) additional target
         if: needs.prepare.outputs.push != 'true' && needs.prepare.outputs.has_additional_target == 'true'
@@ -367,8 +383,8 @@ jobs:
           push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ steps.combined_build_args.outputs.args }}
-          cache-from: type=gha,scope=${{ matrix.safe }}-additional
-          cache-to: type=gha,mode=max,scope=${{ matrix.safe }}-additional
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-additional
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-additional
 
       - name: Export additional digest
         if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
@@ -399,6 +415,7 @@ jobs:
     needs: [prepare, build]
     if: needs.prepare.outputs.needs_merge == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Download default digests
         uses: actions/download-artifact@v8
@@ -448,6 +465,8 @@ jobs:
       - name: Generate additional target tags
         if: needs.prepare.outputs.has_additional_target == 'true'
         id: target_tags
+        env:
+          ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
         run: |
           set -euo pipefail
           TARGET_TAGS=""
@@ -457,7 +476,7 @@ jobs:
             tag_part="${full_tag##*:}"
             image_name="${full_tag%%:*}"
             [[ -z "$tag_part" ]] && continue
-            new_tag="${image_name}:${tag_part}-${{ inputs.additionalTarget }}"
+            new_tag="${image_name}:${tag_part}-${ADDITIONAL_TARGET}"
             if [[ -n "$TARGET_TAGS" ]]; then
               TARGET_TAGS="${TARGET_TAGS}"$'\n'
             fi

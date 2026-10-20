@@ -136,28 +136,34 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
-        python-version: "3.x"
+        python-version: "3.14"
 
     - name: Install Python dependencies
       run: |
         python3 -m pip install --upgrade pip
-        python3 -m pip install pyyaml "ruamel.yaml>=0.18,<1"
+        python3 -m pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
       shell: bash
 
     - name: Update Helm chart metadata
       id: update
       env:
         SOURCE_REPO: ${{ github.repository }}
+        CHART_FILE: ${{ inputs.chart_file }}
+        PARENT_CHART_FILE: ${{ inputs.parent_chart_file }}
+        RELEASE_TAG: ${{ inputs.release_tag }}
+        APP_NAME: ${{ inputs.app_name }}
+        SETTINGS_FILE: ${{ inputs.settings_file }}
+        SETTINGS_FILE_KIND: ${{ inputs.settings_file_kind }}
       run: |
-        python3 "${{ github.action_path }}/update_helm_chart.py" \
+        python3 "$GITHUB_ACTION_PATH/update_helm_chart.py" \
           --helm-repo-dir "helm-charts" \
-          --chart-file "${{ inputs.chart_file }}" \
-          --parent-chart-file "${{ inputs.parent_chart_file }}" \
-          --release-tag "${{ inputs.release_tag }}" \
-          --app-name "${{ inputs.app_name }}" \
+          --chart-file "$CHART_FILE" \
+          --parent-chart-file "$PARENT_CHART_FILE" \
+          --release-tag "$RELEASE_TAG" \
+          --app-name "$APP_NAME" \
           --github-output "$GITHUB_OUTPUT" \
-          --settings-file "${{ inputs.settings_file }}" \
-          --settings-file-kind "${{ inputs.settings_file_kind }}" \
+          --settings-file "$SETTINGS_FILE" \
+          --settings-file-kind "$SETTINGS_FILE_KIND" \
           --source-repo "$SOURCE_REPO" \
           --app-repo-dir "source"
       shell: bash
@@ -182,9 +188,11 @@ runs:
       env:
         APP_NAME: ${{ inputs.app_name }}
         APP_VERSION: ${{ steps.update.outputs.new_app_version }}
+        GIT_USER_NAME: ${{ inputs.git_user_name }}
+        GIT_USER_EMAIL: ${{ inputs.git_user_email }}
       run: |
-        git config user.name "${{ inputs.git_user_name }}"
-        git config user.email "${{ inputs.git_user_email }}"
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
         git add -A
         git commit -m "update ${APP_NAME} chart to ${APP_VERSION}"
       shell: bash
