@@ -335,11 +335,13 @@ The `main` ruleset should list these required status-check contexts, exactly as 
 
 1. Required status checks on `main` (the contexts listed in [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
 2. "Allow auto-merge" enabled.
-3. "Allow GitHub Actions to create and approve pull requests" enabled.
 
-Configure the required status checks **before** enabling the other two settings: otherwise the bot's approval satisfies the one-review rule and an auto-merge PR can merge before CI finishes.
+Configure the required status checks **before** enabling auto-merge: otherwise the App's approval satisfies the one-review rule and an auto-merge PR can merge before CI finishes.
 
-The merge is performed with `GITHUB_TOKEN`, which does not trigger `push: main` workflows, so CI and CodeQL do not re-run on `main` after an auto-merge; the pull-request checks are the gate.
+The approval and merge are performed with a token minted from the org's `crucible-ci` GitHub App, not `GITHUB_TOKEN`. Merges made with `GITHUB_TOKEN` do not trigger `push` workflows; merges made under the App do, so the resulting push to `main` triggers workflows such as Auto release. This requires:
+
+- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write).
+- `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). `pull_request` runs for PRs authored by `dependabot[bot]` receive Dependabot secrets, not Actions secrets. If they are missing, the workflow fails with an explicit error before minting a token.
 
 An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
 
