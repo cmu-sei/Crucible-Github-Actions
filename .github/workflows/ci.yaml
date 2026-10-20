@@ -1,6 +1,6 @@
 # Continuous integration for this repository.
 #
-# - actionlint: lints every workflow and composite action (with shellcheck on
+# - actionlint: lints workflow files under .github/workflows/ (with shellcheck on
 #   `run:` scripts). The actionlint binary is pinned by version and by an
 #   inline SHA-256 of the release tarball, verified before it is run.
 # - codeql-plan-tests: runs tests/codeql-plan.test.sh against the plan job of
