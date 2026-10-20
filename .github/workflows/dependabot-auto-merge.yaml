@@ -1,10 +1,10 @@
-# Approve and queue auto-merge for Dependabot minor and patch updates.
+# Approve and queue auto-merge for Dependabot patch updates.
 #
 # Only acts on pull requests authored by `dependabot[bot]` in
 # cmu-sei/Crucible-Github-Actions (forks and other authors are skipped).
-# Minor and patch updates, as classified by Dependabot's own update-type
-# metadata, are approved and queued for auto-merge (squash); major updates are
-# left for a human to review.
+# Patch updates, as classified by Dependabot's own update-type
+# metadata, are approved and queued for auto-merge (squash); minor and major
+# updates are left for a human to review.
 #
 # This workflow never checks out code, so nothing from the pull request is
 # executed; it only reads Dependabot's metadata and calls the GitHub API.
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$UPDATE_TYPE" in
-            version-update:semver-minor|version-update:semver-patch)
+            version-update:semver-patch)
               gh pr review --approve "$PR_URL" --body "Auto-approved: Dependabot $UPDATE_TYPE update ($DEPS)."
               gh pr merge --auto --squash "$PR_URL"
               ;;

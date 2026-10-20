@@ -331,7 +331,7 @@ The `main` ruleset should list these required status-check contexts, exactly as 
 
 `.github/dependabot.yml` checks the GitHub Actions used by the workflows and composite actions weekly and groups all updates into one pull request.
 
-`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot minor and patch updates; major updates are left for manual review. It never checks out code. It depends on these repository settings, configured in this order:
+`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot patch updates; minor and major updates are left for manual review. It never checks out code. It depends on these repository settings, configured in this order:
 
 1. Required status checks on `main` (the contexts listed in [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
 2. "Allow auto-merge" enabled.
