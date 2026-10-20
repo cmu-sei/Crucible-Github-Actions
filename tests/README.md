@@ -4,4 +4,6 @@
 
 Run from the repository root with `bash tests/codeql-plan.test.sh` (needs `bash`, `awk`, `jq`). It prints one PASS/FAIL line per case and exits non-zero on any failure.
 
-Runs in CI as the `codeql-plan-tests` job (`.github/workflows/ci.yaml`); see "Continuous integration" in the top-level README.
+`npm-release.test.sh` extracts the `run:` script of the `validate` step from `.github/workflows/npm-release.yaml` and runs it against a temporary `GITHUB_OUTPUT`, asserting that SemVer versions (with an optional leading `v`) are accepted and normalized, and that malformed versions, invalid dist-tags and unknown `auth-mode` values fail. Run it with `bash tests/npm-release.test.sh` (needs `bash`, `awk`).
+
+Every `tests/*.test.sh` script runs in CI as the `codeql-plan-tests` job (`.github/workflows/ci.yaml`); see "Continuous integration" in the top-level README.
