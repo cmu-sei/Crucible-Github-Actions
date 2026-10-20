@@ -1,0 +1,57 @@
+# Approve and queue auto-merge for Dependabot minor and patch updates.
+#
+# Only acts on pull requests authored by `dependabot[bot]` in
+# cmu-sei/Crucible-Github-Actions (forks and other authors are skipped).
+# Minor and patch updates, as classified by Dependabot's own update-type
+# metadata, are approved and queued for auto-merge (squash); major updates are
+# left for a human to review.
+#
+# This workflow never checks out code, so nothing from the pull request is
+# executed; it only reads Dependabot's metadata and calls the GitHub API.
+#
+# Depends on these repository settings:
+# - "Allow auto-merge" enabled.
+# - "Allow GitHub Actions to create and approve pull requests" enabled.
+# - Required status checks on `main` (the CI and CodeQL jobs), so auto-merge
+#   waits for CI to pass instead of merging immediately.
+# If auto-merge is disabled the merge step fails on purpose so the
+# misconfiguration is visible.
+
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'cmu-sei/Crucible-Github-Actions'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Approve and enable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
+          case "$UPDATE_TYPE" in
+            version-update:semver-minor|version-update:semver-patch)
+              gh pr review --approve "$PR_URL" --body "Auto-approved: Dependabot $UPDATE_TYPE update ($DEPS)."
+              gh pr merge --auto --squash "$PR_URL"
+              ;;
+            *)
+              echo "::notice::Leaving $UPDATE_TYPE update for human review."
+              ;;
+          esac

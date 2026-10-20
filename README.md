@@ -327,6 +327,18 @@ Migration notes:
 
 The `main` ruleset should list these as required status checks: `CI / actionlint`, `CI / codeql-plan-tests`, `CI / update-helm-chart-tests`, plus the `CodeQL` analysis jobs.
 
+## Dependabot
+
+`.github/dependabot.yml` checks the GitHub Actions used by the workflows and composite actions weekly and groups all updates into one pull request.
+
+`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot minor and patch updates; major updates are left for manual review. It never checks out code. It depends on these repository settings:
+
+- "Allow auto-merge" enabled.
+- "Allow GitHub Actions to create and approve pull requests" enabled.
+- Required status checks on `main` (see [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
+
+An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
+
 ## Releasing
 
 Each action family in this repository is versioned independently. Releases are tagged per family:
