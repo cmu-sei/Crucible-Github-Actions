@@ -6,8 +6,10 @@
 # callers can opt into `autobuild` or `manual`. Other compiled languages
 # (go, java-kotlin, c-cpp, swift) default to `autobuild`.
 #
-# The query suite and paths-ignore list are defined centrally below, so
-# changing them here (and cutting a codeql-vX.Y.Z tag) updates every caller.
+# The query suite and the central paths-ignore / query-filters exclusions are
+# defined below, so changing them here (and cutting a codeql-vX.Y.Z tag)
+# updates every caller. Callers may append their own exclusions via the
+# `paths-ignore` and `exclude-queries` inputs but cannot remove central ones.
 
 name: CodeQL
 
@@ -42,6 +44,14 @@ on:
         description: "Timeout for each analyze job."
         type: number
         default: 30
+      paths-ignore:
+        description: "Newline-separated glob patterns to exclude, appended to the central list (node_modules, dist, bin, obj). For interpreted languages and build-mode none this excludes files from analysis; for traced builds it only filters alerts."
+        type: string
+        default: ""
+      exclude-queries:
+        description: "Comma-separated CodeQL query IDs to exclude (e.g. `cs/log-forging,js/xss`), appended to the central exclusions (actions/unpinned-tag)."
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -53,6 +63,7 @@ jobs:
     outputs:
       include: ${{ steps.matrix.outputs.include }}
       queries: ${{ steps.matrix.outputs.queries }}
+      config: ${{ steps.config.outputs.config }}
     steps:
       - name: Build language matrix
         id: matrix
@@ -91,6 +102,45 @@ jobs:
           echo "include=$include" >> "$GITHUB_OUTPUT"
           echo "queries=$queries" >> "$GITHUB_OUTPUT"
 
+      # actions/unpinned-tag is excluded centrally by org decision: consumers
+      # reference Crucible-Github-Actions by floating per-family tags (e.g.
+      # @codeql-v1) so fixes propagate without a PR in every repo. Callers may
+      # add exclusions via inputs but cannot remove the central ones.
+      - name: Build CodeQL config
+        id: config
+        env:
+          PATHS_IGNORE: ${{ inputs.paths-ignore }}
+          EXCLUDE_QUERIES: ${{ inputs.exclude-queries }}
+        run: |
+          set -euo pipefail
+          CENTRAL_PATHS_IGNORE=("**/node_modules/**" "**/dist/**" "**/bin/**" "**/obj/**")
+          CENTRAL_EXCLUDE_QUERIES=("actions/unpinned-tag")
+          trim() { local s="$1"; s="${s#"${s%%[! ]*}"}"; s="${s%"${s##*[! ]}"}"; printf '%s' "$s"; }
+          paths=("${CENTRAL_PATHS_IGNORE[@]}")
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [[ "$line" =~ [[:cntrl:]] ]]; then
+              echo "::error::paths-ignore entries must not contain tabs or control characters"; exit 1
+            fi
+            item="$(trim "$line")"
+            [ -n "$item" ] && paths+=("$item")
+          done <<<"$PATHS_IGNORE"
+          queries=("${CENTRAL_EXCLUDE_QUERIES[@]}")
+          mapfile -t requested < <(printf '%s' "$EXCLUDE_QUERIES" | tr ',' '\n')
+          for raw in "${requested[@]}"; do
+            id="$(trim "$raw")"
+            [ -z "$id" ] && continue
+            if ! [[ "$id" =~ ^[a-z][a-z0-9-]*/[a-z0-9][a-z0-9/-]*$ ]]; then
+              echo "::error::Invalid CodeQL query id '$id' (expected like cs/log-forging)"; exit 1
+            fi
+            queries+=("$id")
+          done
+          paths_json="$(jq -cn --args '{"paths-ignore": ($ARGS.positional | reduce .[] as $p ([]; if any(.[]; . == $p) then . else . + [$p] end))}' -- "${paths[@]}")"
+          filters_json="$(jq -cn --args '{"query-filters": ($ARGS.positional | reduce .[] as $q ([]; if any(.[]; . == $q) then . else . + [$q] end) | map({exclude: {id: .}}))}' -- "${queries[@]}")"
+          config="$(jq -cn --argjson a "$paths_json" --argjson b "$filters_json" '$a + $b')"
+          if [[ "$config" == *$'\n'* ]]; then echo "::error::CodeQL config must be a single line"; exit 1; fi
+          echo "Config: $config"
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+
   analyze:
     name: Analyze (${{ matrix.language }})
     needs: plan
@@ -126,19 +176,7 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: ${{ needs.plan.outputs.queries }}
-          # actions/unpinned-tag is excluded by org decision: consumers reference
-          # Crucible-Github-Actions by floating per-family tags (e.g. @codeql-v1)
-          # so that fixes propagate without a PR in every repo. Pin third-party
-          # actions by SHA where you want that guarantee.
-          config: |
-            paths-ignore:
-              - "**/node_modules/**"
-              - "**/dist/**"
-              - "**/bin/**"
-              - "**/obj/**"
-            query-filters:
-              - exclude:
-                  id: actions/unpinned-tag
+          config: ${{ needs.plan.outputs.config }}
 
       - name: Build (manual)
         if: matrix.build-mode == 'manual'
