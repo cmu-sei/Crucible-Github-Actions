@@ -185,8 +185,16 @@ jobs:
           (cd "$API_DIR" && dotnet swagger tofile --output "$GITHUB_WORKSPACE/$CLIENT_DIR/$OUT" "$GITHUB_WORKSPACE/$dll" "$DOC")
           cd "$CLIENT_DIR"
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-          # Runtime comes from nswag.json, so it can't drift from the project.
-          npx --no-install nswag run
+          # The NSwag npm CLI does not pick its binary from nswag.json (it falls
+          # back to a default runtime and then rejects a document declaring
+          # another), so pass the document's own runtime explicitly; it then
+          # can't drift from nswag.json.
+          runtime="$(node -p 'require("./nswag.json").runtime || ""')"
+          if [ -n "$runtime" ]; then
+            npx --no-install nswag run "/runtime:$runtime"
+          else
+            npx --no-install nswag run
+          fi
 
       - name: Pack
         env:
