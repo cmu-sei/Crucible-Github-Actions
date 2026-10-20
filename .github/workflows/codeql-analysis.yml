@@ -1,0 +1,24 @@
+# This repository is the first consumer of its own shared CodeQL workflow.
+# `python` covers actions/header/header.py and actions/update-helm-chart/*.py;
+# `actions` (added automatically) covers every workflow and composite action here.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions: {}
+
+jobs:
+  codeql:
+    uses: ./.github/workflows/codeql.yaml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    with:
+      languages: python

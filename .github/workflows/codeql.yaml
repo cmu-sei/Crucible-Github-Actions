@@ -1,0 +1,192 @@
+# Reusable CodeQL code-scanning workflow for Crucible repositories.
+#
+# Pipeline shape: plan (validate languages, build the matrix) -> analyze
+# (one job per language). Interpreted languages and the `actions` language
+# always use build-mode `none`. C# defaults to `none` (no build needed);
+# callers can opt into `autobuild` or `manual`. Other compiled languages
+# (go, java-kotlin, c-cpp, swift) default to `autobuild`.
+#
+# The query suite and the central paths-ignore / query-filters exclusions are
+# defined below, so changing them here (and cutting a codeql-vX.Y.Z tag)
+# updates every caller. Callers may append their own exclusions via the
+# `paths-ignore` and `exclude-queries` inputs but cannot remove central ones.
+
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: "Comma-separated CodeQL languages, e.g. `csharp` or `javascript-typescript`."
+        type: string
+        required: true
+      include-actions:
+        description: "Also scan the caller's GitHub Actions workflows (`actions` language)."
+        type: boolean
+        default: true
+      build-mode:
+        description: "C# build mode: none | autobuild | manual. Other compiled languages use autobuild unless this is manual."
+        type: string
+        default: none
+      build-command:
+        description: "Shell command run between init and analyze when build-mode is manual (e.g. `dotnet build Alloy.Api -c Release`)."
+        type: string
+        default: ""
+      query-suite:
+        description: "CodeQL query suite: default (CodeQL's default suite; passes no `queries`) | security-extended | security-and-quality | security-experimental."
+        type: string
+        default: security-extended
+      runs-on:
+        description: "Runner label for the analyze jobs."
+        type: string
+        default: ubuntu-24.04
+      timeout-minutes:
+        description: "Timeout for each analyze job."
+        type: number
+        default: 30
+      paths-ignore:
+        description: "Newline-separated glob patterns to exclude, appended to the central list (node_modules, dist, bin, obj). For interpreted languages and build-mode none this excludes files from analysis; for traced builds it only filters alerts."
+        type: string
+        default: ""
+      exclude-queries:
+        description: "Comma-separated CodeQL query IDs to exclude (e.g. `cs/log-forging,js/xss`), appended to the central exclusions (actions/unpinned-tag)."
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan languages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      include: ${{ steps.matrix.outputs.include }}
+      queries: ${{ steps.matrix.outputs.queries }}
+      config: ${{ steps.config.outputs.config }}
+    steps:
+      - name: Build language matrix
+        id: matrix
+        env:
+          LANGUAGES: ${{ inputs.languages }}
+          INCLUDE_ACTIONS: ${{ inputs.include-actions }}
+          BUILD_MODE: ${{ inputs.build-mode }}
+          QUERY_SUITE: ${{ inputs.query-suite }}
+        run: |
+          set -euo pipefail
+          case "$BUILD_MODE" in none|autobuild|manual) ;; *)
+            echo "::error::build-mode must be none, autobuild or manual (got '$BUILD_MODE')"; exit 1 ;;
+          esac
+          case "$QUERY_SUITE" in
+            default) queries="" ;;
+            security-extended|security-and-quality|security-experimental) queries="$QUERY_SUITE" ;;
+            *) echo "::error::query-suite must be default, security-extended, security-and-quality or security-experimental (got '$QUERY_SUITE')"; exit 1 ;;
+          esac
+          langs="$(printf '%s' "$LANGUAGES" | tr ',' '\n' | tr -d ' ')"
+          if [ "$INCLUDE_ACTIONS" = "true" ]; then langs="$(printf '%s\nactions' "$langs")"; fi
+          include='[]'
+          for lang in $(printf '%s\n' "$langs" | grep -v '^$' | sort -u); do
+            case "$lang" in
+              actions|javascript-typescript|python|ruby|rust) mode=none ;;
+              csharp) mode="$BUILD_MODE" ;;
+              go|java-kotlin|c-cpp|swift) if [ "$BUILD_MODE" = manual ]; then mode=manual; else mode=autobuild; fi ;;
+              *) echo "::error::Unsupported CodeQL language '$lang'"; exit 1 ;;
+            esac
+            include="$(jq -c --arg l "$lang" --arg m "$mode" '. + [{language: $l, "build-mode": $m}]' <<<"$include")"
+          done
+          if [ "$include" = '[]' ]; then
+            echo "::error::No languages to analyze (languages='$LANGUAGES', include-actions=$INCLUDE_ACTIONS)"; exit 1
+          fi
+          echo "Matrix: $include"
+          echo "Queries: ${queries:-<CodeQL default suite>}"
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+          echo "queries=$queries" >> "$GITHUB_OUTPUT"
+
+      # actions/unpinned-tag is excluded centrally by org decision: consumers
+      # reference Crucible-Github-Actions by floating per-family tags (e.g.
+      # @codeql-v1) so fixes propagate without a PR in every repo. Callers may
+      # add exclusions via inputs but cannot remove the central ones.
+      - name: Build CodeQL config
+        id: config
+        env:
+          PATHS_IGNORE: ${{ inputs.paths-ignore }}
+          EXCLUDE_QUERIES: ${{ inputs.exclude-queries }}
+        run: |
+          set -euo pipefail
+          CENTRAL_PATHS_IGNORE=("**/node_modules/**" "**/dist/**" "**/bin/**" "**/obj/**")
+          CENTRAL_EXCLUDE_QUERIES=("actions/unpinned-tag")
+          trim() { local s="$1"; s="${s#"${s%%[! ]*}"}"; s="${s%"${s##*[! ]}"}"; printf '%s' "$s"; }
+          paths=("${CENTRAL_PATHS_IGNORE[@]}")
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [[ "$line" =~ [[:cntrl:]] ]]; then
+              echo "::error::paths-ignore entries must not contain tabs or control characters"; exit 1
+            fi
+            item="$(trim "$line")"
+            [ -n "$item" ] && paths+=("$item")
+          done <<<"$PATHS_IGNORE"
+          queries=("${CENTRAL_EXCLUDE_QUERIES[@]}")
+          mapfile -t requested < <(printf '%s' "$EXCLUDE_QUERIES" | tr ',' '\n')
+          for raw in "${requested[@]}"; do
+            id="$(trim "$raw")"
+            [ -z "$id" ] && continue
+            if ! [[ "$id" =~ ^[a-z][a-z0-9-]*/[a-z0-9][a-z0-9/-]*$ ]]; then
+              echo "::error::Invalid CodeQL query id '$id' (expected like cs/log-forging)"; exit 1
+            fi
+            queries+=("$id")
+          done
+          paths_json="$(jq -cn --args '{"paths-ignore": ($ARGS.positional | reduce .[] as $p ([]; if any(.[]; . == $p) then . else . + [$p] end))}' -- "${paths[@]}")"
+          filters_json="$(jq -cn --args '{"query-filters": ($ARGS.positional | reduce .[] as $q ([]; if any(.[]; . == $q) then . else . + [$q] end) | map({exclude: {id: .}}))}' -- "${queries[@]}")"
+          config="$(jq -cn --argjson a "$paths_json" --argjson b "$filters_json" '$a + $b')"
+          if [[ "$config" == *$'\n'* ]]; then echo "::error::CodeQL config must be a single line"; exit 1; fi
+          echo "Config: $config"
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: plan
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET (from global.json)
+        if: matrix.language == 'csharp' && matrix.build-mode != 'none'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+
+      - name: Setup Go (from go.mod)
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: ${{ needs.plan.outputs.queries }}
+          config: ${{ needs.plan.outputs.config }}
+
+      - name: Build (manual)
+        if: matrix.build-mode == 'manual'
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: |
+          if [ -z "$BUILD_COMMAND" ]; then echo "::error::build-mode manual requires build-command"; exit 1; fi
+          bash -euo pipefail -c "$BUILD_COMMAND"
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: /language:${{ matrix.language }}
