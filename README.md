@@ -212,7 +212,7 @@ Callers inherit the workflow’s caching, tagging, and push logic without duplic
 
 Build modes: interpreted languages (`javascript-typescript`, `python`, `ruby`, `rust`) and `actions` always use `none`. C# defaults to `none` (no build needed); set `build-mode` to `autobuild` or `manual` to analyze a real build instead (the .NET SDK is then installed from the repository's `global.json`). Other compiled languages (`go`, `java-kotlin`, `c-cpp`, `swift`) use `autobuild`, or `manual` when requested; Go also installs the toolchain from `go.mod`, which must be at the repository root. `build-mode` applies to every compiled language in a single call, so pass one compiled language per caller (the expected use).
 
-The query suite (default `security-extended`) and the `paths-ignore` list (`**/node_modules/**`, `**/dist/**`, `**/bin/**`, `**/obj/**`) are defined centrally in this workflow, so changing them here and cutting a `codeql` release updates every caller.
+The query suite (default `security-extended`), the central `paths-ignore` list (`**/node_modules/**`, `**/dist/**`, `**/bin/**`, `**/obj/**`) and the central query exclusions (`actions/unpinned-tag`) are defined in this workflow, so changing them here and cutting a `codeql` release updates every caller. The `plan` job merges them with any caller exclusions into a single CodeQL config (logged as `Config: {...}`).
 
 This repository scans itself with the same workflow — see `.github/workflows/codeql-analysis.yml` — and is a working caller example.
 
@@ -227,6 +227,8 @@ This repository scans itself with the same workflow — see `.github/workflows/c
 | `query-suite` |  | CodeQL query suite: `default` (CodeQL's default suite; no `queries` is passed), or one of the named suites `security-extended`, `security-and-quality`, `security-experimental`. Any other value fails the `plan` job. | `security-extended` |
 | `runs-on` |  | Runner label for the analyze jobs. | `ubuntu-24.04` |
 | `timeout-minutes` |  | Timeout for each analyze job. | `30` |
+| `paths-ignore` |  | Newline-separated glob patterns to exclude, appended to the central list (`node_modules`, `dist`, `bin`, `obj`). Entries are trimmed, blank lines dropped; tabs or control characters fail the `plan` job. | `""` |
+| `exclude-queries` |  | Comma-separated CodeQL query IDs to exclude (e.g. `cs/log-forging,js/xss`), appended to the central exclusions (`actions/unpinned-tag`). An ID not shaped like `<lang>/<query>` fails the `plan` job. | `""` |
 
 #### Required Permissions
 
@@ -296,11 +298,26 @@ jobs:
 
 When migrating an existing CodeQL workflow, keep the repo's existing `on:` block; trigger clean-up is a separate effort.
 
+#### Excluding paths and queries
+
+Callers can add repository-specific exclusions; they are appended to (never replace) the central ones, and duplicates are dropped:
+
+```yaml
+    with:
+      languages: csharp
+      paths-ignore: |
+        Alloy.Api.Client/**
+        **/Migrations/**
+      exclude-queries: cs/log-forging
+```
+
+For interpreted languages and `build-mode: none`, `paths-ignore` removes the matching files from analysis entirely. For traced builds (`autobuild` / `manual`) CodeQL still extracts every compiled file, so `paths-ignore` only filters alerts in those paths out of the results. `exclude-queries` drops the listed queries' results for every language in the call. Central exclusions cannot be removed by callers.
+
 Migration notes:
 
 - CodeQL v4 rejects the old language aliases: callers migrating from `javascript` must use `javascript-typescript`.
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
-- The `actions/unpinned-tag` query is excluded centrally (via `query-filters` in the shared workflow) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
+- The `actions/unpinned-tag` query is in the central exclusion list (merged into `query-filters` by the `plan` job, and not removable by callers) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
 
 ## Releasing
 
