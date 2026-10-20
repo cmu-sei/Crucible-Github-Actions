@@ -143,6 +143,8 @@ jobs:
           use_block_comments: false
 ```
 
+Call this action from `pull_request` (or `push`) workflows only; it refuses to run on `pull_request_target`, `issue_comment` and `workflow_run`, because it checks out and pushes to the PR head.
+
 The action checks out the current branch, runs `header.py` to add missing headers, and automatically commits/pushes fixes when changes are detected.
 
 #### Exempting files with `.headerignore`
