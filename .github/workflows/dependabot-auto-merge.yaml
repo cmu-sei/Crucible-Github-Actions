@@ -77,6 +77,9 @@ jobs:
           private-key: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          # Narrow the token to what approve + auto-merge need (least privilege).
+          permission-contents: write
+          permission-pull-requests: write
 
       - name: Approve and enable auto-merge
         if: steps.meta.outputs.update-type == 'version-update:semver-patch'

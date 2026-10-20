@@ -340,7 +340,7 @@ Configure the required status checks **before** enabling auto-merge: otherwise t
 
 The approval and merge are performed with a token minted from the org's `crucible-ci` GitHub App, not `GITHUB_TOKEN`. Merges made with `GITHUB_TOKEN` do not trigger `push` workflows; merges made under the App do, so the resulting push to `main` triggers workflows such as Auto release. This requires:
 
-- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write).
+- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write); the minted token is narrowed to only those two permissions.
 - `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). `pull_request` runs for PRs authored by `dependabot[bot]` receive Dependabot secrets, not Actions secrets. If they are missing, the workflow fails with an explicit error before minting a token.
 
 An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
