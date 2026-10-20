@@ -325,7 +325,9 @@ Migration notes:
 
 `.github/workflows/npm-release.yaml` is a `workflow_call` reusable workflow that publishes an npm package for Crucible libraries (Crucible.Common.Ui, console-forge). One job validates the inputs, sets the version in each listed `package.json` (`npm version --no-git-tag-version`), runs the caller's build command, optionally commits the version bump back to the triggering branch, and runs `npm publish` (with `--access public`, the dist-tag if given, and `--provenance` by default).
 
-Inputs are passed to scripts through environment variables only, and the version is validated as SemVer before anything else runs (a leading `v` is stripped, so release tag names can be passed directly). `dry-run: true` validates a caller end to end without publishing: the version commit is skipped, `npm publish --dry-run` prints the tarball contents, and no `NPM_TOKEN` is needed.
+Inputs are passed to scripts through environment variables only, and the version is validated as SemVer before anything else runs (a leading `v` is stripped, so release tag names can be passed directly; build metadata such as `+build.5` is rejected because `npm version` strips it, so the `{version}` path and commit message would not match). `dry-run: true` validates a caller end to end without publishing: the version commit is skipped, `npm publish --dry-run` prints the tarball contents, and no `NPM_TOKEN` is needed.
+
+Runs share the concurrency group `npm-release-<repository>` with `cancel-in-progress: false`, but GitHub still cancels an older *pending* run when a newer one queues in the same group, so queue releases one at a time.
 
 #### Inputs
 
@@ -335,8 +337,8 @@ Inputs are passed to scripts through environment variables only, and the version
 | `dist-tag` |  | npm dist-tag, e.g. `next` or `rc`. Required for prerelease versions (`X.Y.Z-…`): npm refuses to publish them without `--tag`, so the workflow fails at validation instead. Must match `^[a-z][a-z0-9._-]*$`. | `""` |
 | `version-dirs` |  | Newline-separated directories whose `package.json` gets the version (root first). | `.` |
 | `build-command` |  | Shell command that installs dependencies and builds the package. | `npm ci && npm run build` |
-| `publish-path` | ✅ | Directory or `.tgz` to publish. `{version}` is replaced with the version. | |
-| `commit-version` |  | Commit the `package.json`/`package-lock.json` bump back to the triggering branch (needs `contents: write`). | `false` |
+| `publish-path` | ✅ | Directory or `.tgz` to publish. `{version}` is replaced with the version. A relative path is given a `./` prefix (npm would otherwise read a bare `dist/pkg` as a GitHub `owner/repo` shorthand). | |
+| `commit-version` |  | Commit the `package.json`/`package-lock.json` bump back to the triggering branch (needs `contents: write`). Requires a branch ref (`workflow_dispatch` or `push` on a branch); on a tag, release or pull request run the workflow fails at validation (unless `dry-run`). | `false` |
 | `provenance` |  | Publish with npm provenance (needs `id-token: write`). | `true` |
 | `node-version` |  | Node.js version for `actions/setup-node`. | `24` |
 | `auth-mode` |  | `api-key` (publish with the `NPM_TOKEN` secret) or `trusted` (npm trusted publishing). | `api-key` |
@@ -350,7 +352,7 @@ Inputs are passed to scripts through environment variables only, and the version
 
 #### Required Permissions
 
-The shared workflow declares no permissions block, so its job inherits the calling job's grant (a called workflow that declares more than its caller grants fails to start, which would break read-only callers). The calling job grants only what it uses: `contents: read` (or `contents: write` with `commit-version: true`) plus `id-token: write` when `provenance` is `true`.
+The shared workflow declares no permissions block, so its job inherits the calling job's grant (a called workflow that declares more than its caller grants fails to start, which would break read-only callers). The calling job grants only what it uses: `contents: read` (or `contents: write` with `commit-version: true`) plus `id-token: write` when `provenance` is `true` or `auth-mode` is `trusted`.
 
 #### Example Usage
 
@@ -406,8 +408,9 @@ jobs:
     with:
       version: ${{ github.event.release.tag_name }}
       dist-tag: ${{ github.event.release.prerelease && 'next' || '' }}
-      build-command: npm ci && npm run build
-      publish-path: dist/console-forge
+      version-dirs: projects/console-forge   # the library's package.json; the root one is a 0.0.0 shell
+      build-command: npm ci && (cd projects/console-forge && npm ci) && npm run build
+      publish-path: ./dist/console-forge     # adjust to the package's build output (ng-package.json `dest`)
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_APIKEY }}
 ```

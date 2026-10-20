@@ -33,7 +33,8 @@ OUT="$TMP/out"; ERR="$TMP/err"
 # run_step VAR=value ...  -> sets $rc; output in $OUT, stderr+stdout in $ERR
 run_step() {
   : > "$OUT"
-  env -i PATH="$PATH" GITHUB_OUTPUT="$OUT" VERSION=1.2.3 DIST_TAG= AUTH_MODE=api-key "$@" \
+  env -i PATH="$PATH" GITHUB_OUTPUT="$OUT" VERSION=1.2.3 DIST_TAG= AUTH_MODE=api-key \
+    PUBLISH_PATH='dist/pkg-{version}.tgz' COMMIT_VERSION=false DRY_RUN=false REF_TYPE=branch REF=refs/heads/main "$@" \
     bash "$TMP/validate.sh" > "$ERR" 2>&1
   rc=$?
 }
@@ -61,14 +62,56 @@ check "dist-tag: next accepted" t
 t() { run_step VERSION=2.0.0-rc.1; [ "$rc" = 1 ] && grep -q "needs a dist-tag" "$ERR" && [ ! -s "$OUT" ]; }
 check "dist-tag: prerelease without dist-tag rejected" t
 
-t() { run_step VERSION=1.2.3+build.5; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3+build.5 ]; }
-check "version: build metadata is not a prerelease" t
+t() { run_step VERSION=1.2.3+build.5; [ "$rc" = 1 ] && grep -q "has SemVer build metadata" "$ERR" && [ ! -s "$OUT" ]; }
+check "version: build metadata rejected" t
+
+t() { run_step VERSION=1.2.3-rc.1 DIST_TAG=next; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3-rc.1 ]; }
+check "version: prerelease 1.2.3-rc.1 accepted" t
+
+t() { run_step VERSION=1.2.3-0 DIST_TAG=next; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3-0 ]; }
+check "version: numeric prerelease 1.2.3-0 accepted" t
+
+t() { run_step VERSION=1.2.3-rc..1 DIST_TAG=next; [ "$rc" = 1 ] && grep -q "is not a SemVer version" "$ERR" && [ ! -s "$OUT" ]; }
+check "version: empty prerelease identifier (1.2.3-rc..1) rejected" t
+
+t() { run_step VERSION=1.2.3-01 DIST_TAG=next; [ "$rc" = 1 ] && grep -q "is not a SemVer version" "$ERR" && [ ! -s "$OUT" ]; }
+check "version: leading-zero numeric prerelease (1.2.3-01) rejected" t
 
 t() { run_step 'DIST_TAG=Bad Tag'; [ "$rc" = 1 ] && grep -q "invalid dist-tag" "$ERR" && [ ! -s "$OUT" ]; }
 check "dist-tag: 'Bad Tag' rejected" t
 
 t() { run_step AUTH_MODE=bogus; [ "$rc" = 1 ] && grep -q "auth-mode must be api-key or trusted" "$ERR" && [ ! -s "$OUT" ]; }
 check "auth-mode: bogus rejected" t
+
+# ---- commit-version ref guard ----
+t() { run_step COMMIT_VERSION=true; [ "$rc" = 0 ]; }
+check "commit-version: branch ref accepted" t
+
+t() { run_step COMMIT_VERSION=true REF_TYPE=tag REF=refs/tags/v1.2.3
+  [ "$rc" = 1 ] && grep -q "::error::commit-version requires a branch-triggered run (workflow_dispatch or push); got ref_type=tag" "$ERR" && [ ! -s "$OUT" ]; }
+check "commit-version: tag ref rejected" t
+
+t() { run_step COMMIT_VERSION=true REF_TYPE=branch REF=refs/pull/7/merge; [ "$rc" = 1 ] && grep -q "commit-version requires a branch-triggered run" "$ERR"; }
+check "commit-version: pull request merge ref rejected" t
+
+t() { run_step COMMIT_VERSION=true DRY_RUN=true REF_TYPE=tag REF=refs/tags/v1.2.3; [ "$rc" = 0 ]; }
+check "commit-version: tag ref allowed in dry-run" t
+
+# ---- publish-path ----
+t() { run_step VERSION=v1.2.3; [ "$rc" = 0 ] && [ "$(out_val publish_path)" = ./dist/pkg-1.2.3.tgz ]; }
+check "publish-path: {version} substituted, ./ prefixed" t
+
+t() { run_step PUBLISH_PATH=dist/console-forge; [ "$rc" = 0 ] && [ "$(out_val publish_path)" = ./dist/console-forge ]; }
+check "publish-path: bare relative dir gets ./ (not a GitHub shorthand)" t
+
+t() { run_step PUBLISH_PATH=./dist/x; [ "$rc" = 0 ] && [ "$(out_val publish_path)" = ./dist/x ]; }
+check "publish-path: ./ path unchanged" t
+
+t() { run_step PUBLISH_PATH=/abs/x; [ "$rc" = 0 ] && [ "$(out_val publish_path)" = /abs/x ]; }
+check "publish-path: absolute path unchanged" t
+
+t() { run_step PUBLISH_PATH=$'dist/x\nversion=9.9.9'; [ "$rc" = 1 ] && grep -q "publish-path must be non-empty" "$ERR" && [ ! -s "$OUT" ]; }
+check "publish-path: newline (output injection) rejected" t
 
 echo "----"
 echo "$pass passed, $fail failed"
