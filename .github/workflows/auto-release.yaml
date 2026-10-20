@@ -119,7 +119,7 @@ jobs:
 
             # Highest-impact marker across the family's commits since the tag:
             # skip > major > minor > patch (default).
-            bump=patch
+            bump="patch"
             reason="patch (default)"
             rank=0
             while read -r sha; do
