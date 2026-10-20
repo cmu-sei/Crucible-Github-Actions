@@ -321,6 +321,101 @@ Migration notes:
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
 - The `actions/unpinned-tag` query is in the central exclusion list (merged into `query-filters` by the `plan` job, and not removable by callers) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
 
+### npm Release
+
+`.github/workflows/npm-release.yaml` is a `workflow_call` reusable workflow that publishes an npm package for Crucible libraries (Crucible.Common.Ui, console-forge). One job validates the inputs, sets the version in each listed `package.json` (`npm version --no-git-tag-version`), runs the caller's build command, optionally commits the version bump back to the triggering branch, and runs `npm publish` (with `--access public`, the dist-tag if given, and `--provenance` by default).
+
+Inputs are passed to scripts through environment variables only, and the version is validated as SemVer before anything else runs (a leading `v` is stripped, so release tag names can be passed directly). `dry-run: true` validates a caller end to end without publishing: the version commit is skipped, `npm publish --dry-run` prints the tarball contents, and no `NPM_TOKEN` is needed.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `version` | ✅ | Package version (SemVer). A leading `v` is stripped. | |
+| `dist-tag` |  | npm dist-tag (required by npm for prerelease versions, e.g. `next` or `rc`). Must match `^[a-z][a-z0-9._-]*$`. | `""` |
+| `version-dirs` |  | Newline-separated directories whose `package.json` gets the version (root first). | `.` |
+| `build-command` |  | Shell command that installs dependencies and builds the package. | `npm ci && npm run build` |
+| `publish-path` | ✅ | Directory or `.tgz` to publish. `{version}` is replaced with the version. | |
+| `commit-version` |  | Commit the `package.json`/`package-lock.json` bump back to the triggering branch (needs `contents: write`). | `false` |
+| `provenance` |  | Publish with npm provenance (needs `id-token: write`). | `true` |
+| `node-version` |  | Node.js version for `actions/setup-node`. | `24` |
+| `auth-mode` |  | `api-key` (publish with the `NPM_TOKEN` secret) or `trusted` (npm trusted publishing). | `api-key` |
+| `dry-run` |  | Run `npm publish --dry-run` and skip the version commit. | `false` |
+
+#### Secrets
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `NPM_TOKEN` | With `auth-mode: api-key` (except in `dry-run`) | npm automation/granular token. Crucible repositories pass their existing `NPM_APIKEY` secret. |
+
+#### Required Permissions
+
+The workflow declares the most it may use (`contents: write`, `id-token: write`); a called workflow's token is capped by the caller's grant, so the calling job grants only what it uses: `contents: read` (or `contents: write` with `commit-version: true`) plus `id-token: write` when `provenance` is `true`.
+
+#### Example Usage
+
+Crucible.Common.Ui (manual dispatch, version bump committed back to the branch):
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version of the Client package"
+        required: true
+      tag:
+        description: "npm dist-tag (required for prerelease versions, e.g. next, rc)"
+        required: false
+
+permissions: {}
+
+jobs:
+  release:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/npm-release.yaml@npm-v1
+    permissions:
+      contents: write          # commit-version pushes the bump to the branch
+      id-token: write          # npm provenance
+    with:
+      version: ${{ inputs.version }}
+      dist-tag: ${{ inputs.tag }}
+      version-dirs: |
+        .
+        projects/@crucible-common
+      build-command: npm install && npm run pack
+      publish-path: dist/@crucible-common/cmusei-crucible-common-{version}.tgz
+      commit-version: true
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_APIKEY }}
+```
+
+console-forge (publish on a GitHub Release, no commit back):
+
+```yaml
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  publish:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/npm-release.yaml@npm-v1
+    permissions:
+      contents: read           # no version commit back to main
+      id-token: write          # npm provenance
+    with:
+      version: ${{ github.event.release.tag_name }}
+      dist-tag: ${{ github.event.release.prerelease && 'next' || '' }}
+      build-command: npm ci && npm run build
+      publish-path: dist/console-forge
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_APIKEY }}
+```
+
+#### Provenance vs. trusted publishing
+
+Provenance and trusted publishing are different things. **Provenance** (`--provenance`) attaches a signed attestation linking the published package to the workflow run that built it; it uses the job's OIDC token (`id-token: write`) but the publish itself is still authenticated with `NPM_TOKEN`. **Trusted publishing** replaces `NPM_TOKEN` with OIDC authentication against a trusted-publisher configuration on npmjs.com. Callers use `auth-mode: api-key` today; switching to `auth-mode: trusted` (and dropping the `NPM_TOKEN` secret) is a later phase, once each package has a trusted publisher configured.
+
 ## Continuous integration
 
 `.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
@@ -355,7 +450,8 @@ Each action family in this repository is versioned independently. Releases are t
 | `header` | Header Check composite action | `header-v1.0.1` |
 | `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.2.0` |
 | `codeql` | `.github/workflows/codeql.yaml` | `codeql-v1.0.0` |
-| `nuget`, `npm` | Reserved for upcoming families | `nuget-v1.0.0` |
+| `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
+| `nuget` | Reserved for an upcoming family | `nuget-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 
