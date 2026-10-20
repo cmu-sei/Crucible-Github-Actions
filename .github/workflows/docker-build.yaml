@@ -55,7 +55,7 @@ on:
         required: false
         default: "linux/amd64,linux/arm64"
       preBuildCommands:
-        description: "Optional shell commands to run before docker build (e.g. fetch artifacts)"
+        description: "Optional shell commands to run before docker build (e.g. fetch artifacts). Runs as caller-supplied shell with the calling workflow's trust."
         type: string
         required: false
 
@@ -84,7 +84,7 @@ jobs:
         id: push_condition
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
             echo "Workflow triggered by pull_request. Will not push."
             PUSH=false
           else
@@ -108,6 +108,7 @@ jobs:
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "needs_merge=$NEEDS_MERGE" >> "$GITHUB_OUTPUT"
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_PUSH: ${{ inputs.push }}
 
       - name: Compute flags
@@ -186,13 +187,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # preBuildCommands is caller-supplied shell by design; it runs with the same trust as the calling workflow.
       - name: Pre-build commands
         if: inputs.preBuildCommands != ''
         shell: bash
         run: |
           set -euo pipefail
-          echo "Running pre-build commands on ${{ matrix.platform }}..."
-          ${{ inputs.preBuildCommands }}
+          echo "Running pre-build commands on $PLATFORM..."
+          bash -euo pipefail -c "$PRE_BUILD_COMMANDS"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          PRE_BUILD_COMMANDS: ${{ inputs.preBuildCommands }}
 
       - name: Determine version from tag
         id: version
@@ -223,7 +228,6 @@ jobs:
         if: inputs.versionMode == 'npm' && steps.version.outputs.version != '' && inputs.versionFiles != ''
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           echo "Setting npm version to: $VERSION"
           mapfile -t FILES <<< "$INPUT_VERSION_FILES"
           for f in "${FILES[@]}"; do
@@ -239,6 +243,7 @@ jobs:
             echo "Updated $f to version $VERSION"
           done
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           INPUT_VERSION_FILES: ${{ inputs.versionFiles }}
 
       - name: Prepare build args for .NET version (csproj)
@@ -246,13 +251,14 @@ jobs:
         if: inputs.versionMode == 'csproj' && steps.version.outputs.version != ''
         run: |
           set -euo pipefail
-          VERSION="${{ steps.version.outputs.version }}"
           echo "Injecting .NET version as build args: $VERSION"
           {
             echo "args<<EOF"
             echo "VERSION=$VERSION"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
 
       - name: Combine build args
         id: combined_build_args
@@ -335,12 +341,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests/default
-          digest="${{ steps.build_default_push.outputs.digest }}"
+          digest="$DIGEST"
           if [[ -z "$digest" ]]; then
-            echo "::error::No digest produced for default stage on ${{ matrix.platform }}"
+            echo "::error::No digest produced for default stage on $PLATFORM"
             exit 1
           fi
           touch "/tmp/digests/default/${digest#sha256:}"
+        env:
+          DIGEST: ${{ steps.build_default_push.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
 
       # Per-platform artifact name (digests-default-linux-amd64, etc.)
       # so the merge job can download all platforms' digests together
@@ -391,12 +400,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/digests/additional
-          digest="${{ steps.build_additional_push.outputs.digest }}"
+          digest="$DIGEST"
           if [[ -z "$digest" ]]; then
-            echo "::error::No digest produced for additional target on ${{ matrix.platform }}"
+            echo "::error::No digest produced for additional target on $PLATFORM"
             exit 1
           fi
           touch "/tmp/digests/additional/${digest#sha256:}"
+        env:
+          DIGEST: ${{ steps.build_additional_push.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
 
       - name: Upload additional digest
         if: needs.prepare.outputs.push == 'true' && needs.prepare.outputs.has_additional_target == 'true'
@@ -467,10 +479,11 @@ jobs:
         id: target_tags
         env:
           ADDITIONAL_TARGET: ${{ inputs.additionalTarget }}
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           TARGET_TAGS=""
-          mapfile -t TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          mapfile -t TAG_ARRAY <<< "$META_TAGS"
 
           for full_tag in "${TAG_ARRAY[@]}"; do
             tag_part="${full_tag##*:}"
@@ -497,13 +510,14 @@ jobs:
         working-directory: /tmp/digests/default
         env:
           IMAGE_NAME: ${{ inputs.imageName }}
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           TAG_ARGS=()
           while IFS= read -r t; do
             [[ -z "$t" ]] && continue
             TAG_ARGS+=("-t" "$t")
-          done <<< "${{ steps.meta.outputs.tags }}"
+          done <<< "$META_TAGS"
 
           SRC_ARGS=()
           for f in *; do
@@ -531,13 +545,14 @@ jobs:
         working-directory: /tmp/digests/additional
         env:
           IMAGE_NAME: ${{ inputs.imageName }}
+          TARGET_TAGS: ${{ steps.target_tags.outputs.tags }}
         run: |
           set -euo pipefail
           TAG_ARGS=()
           while IFS= read -r t; do
             [[ -z "$t" ]] && continue
             TAG_ARGS+=("-t" "$t")
-          done <<< "${{ steps.target_tags.outputs.tags }}"
+          done <<< "$TARGET_TAGS"
 
           SRC_ARGS=()
           for f in *; do
