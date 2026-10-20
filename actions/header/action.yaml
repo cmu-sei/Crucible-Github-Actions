@@ -15,6 +15,15 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Refuse privileged triggers
+      shell: bash
+      run: |
+        case "$GITHUB_EVENT_NAME" in
+          pull_request_target|issue_comment|workflow_run)
+            echo "::error::The header action checks out the pull request head and pushes to it; it must not run on the privileged '$GITHUB_EVENT_NAME' event. Call it from 'pull_request' (or 'push')."
+            exit 1 ;;
+        esac
+
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         ref: ${{ github.head_ref }}

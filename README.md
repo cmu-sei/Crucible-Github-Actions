@@ -143,6 +143,8 @@ jobs:
           use_block_comments: false
 ```
 
+Call this action from `pull_request` (or `push`) workflows only; it refuses to run on `pull_request_target`, `issue_comment` and `workflow_run`, because it checks out and pushes to the PR head.
+
 The action checks out the current branch, runs `header.py` to add missing headers, and automatically commits/pushes fixes when changes are detected.
 
 #### Exempting files with `.headerignore`
@@ -318,6 +320,30 @@ Migration notes:
 - CodeQL v4 rejects the old language aliases: callers migrating from `javascript` must use `javascript-typescript`.
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
 - The `actions/unpinned-tag` query is in the central exclusion list (merged into `query-filters` by the `plan` job, and not removable by callers) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
+
+## Continuous integration
+
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+
+The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
+
+## Dependabot
+
+`.github/dependabot.yml` checks the GitHub Actions used by the workflows and composite actions weekly and groups all updates into one pull request.
+
+`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot patch updates; minor and major updates are left for manual review. It never checks out code. It depends on these repository settings, configured in this order:
+
+1. Required status checks on `main` (the contexts listed in [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
+2. "Allow auto-merge" enabled.
+
+Configure the required status checks **before** enabling auto-merge: otherwise the App's approval satisfies the one-review rule and an auto-merge PR can merge before CI finishes.
+
+The approval and merge are performed with a token minted from the org's `crucible-ci` GitHub App, not `GITHUB_TOKEN`. Merges made with `GITHUB_TOKEN` do not trigger `push` workflows; merges made under the App do, so the resulting push to `main` triggers workflows such as Auto release. This requires:
+
+- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write); the minted token is narrowed to only those two permissions.
+- `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). `pull_request` runs for PRs authored by `dependabot[bot]` receive Dependabot secrets, not Actions secrets. If they are missing, the workflow fails with an explicit error before minting a token.
+
+An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
 
 ## Releasing
 

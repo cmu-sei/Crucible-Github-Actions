@@ -1,0 +1,87 @@
+# Continuous integration for this repository.
+#
+# - actionlint: lints workflow files under .github/workflows/ (with shellcheck on
+#   `run:` scripts). The actionlint binary is pinned by version and by an
+#   inline SHA-256 of the release tarball, verified before it is run.
+# - codeql-plan-tests: runs tests/codeql-plan.test.sh against the plan job of
+#   .github/workflows/codeql.yaml.
+# - update-helm-chart-tests: runs the pytest suite of actions/update-helm-chart.
+#
+# The job names `actionlint`, `codeql-plan-tests` and `update-helm-chart-tests`
+# are the status-check contexts the `main` ruleset should list as required
+# (the context is the job name, not `<workflow> / <job>`).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download actionlint
+        # To update: bump ACTIONLINT_VERSION and set ACTIONLINT_SHA256 to the
+        # linux_amd64 tarball line of that release's actionlint_<ver>_checksums.txt.
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          cd "$RUNNER_TEMP/actionlint"
+          curl -fsSL -o "$tarball" "$base/$tarball"
+          echo "$ACTIONLINT_SHA256  $tarball" | sha256sum --check --strict
+          tar xzf "$tarball" actionlint
+          echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+
+      - name: Run actionlint
+        run: actionlint -color
+
+  codeql-plan-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run codeql plan tests
+        run: bash tests/codeql-plan.test.sh
+
+  update-helm-chart-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r actions/update-helm-chart/requirements-dev.txt -r actions/update-helm-chart/requirements.txt
+
+      - name: Run pytest
+        working-directory: actions/update-helm-chart
+        run: python -m pytest -q

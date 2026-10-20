@@ -124,6 +124,7 @@ runs:
         ref: ${{ inputs.release_tag }}
         path: source
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Checkout Helm charts repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -179,7 +180,9 @@ runs:
     - name: Create feature branch
       if: steps.update.outputs.has_changes == 'true'
       working-directory: helm-charts
-      run: git checkout -b "${{ steps.update.outputs.branch_name }}"
+      env:
+        BRANCH: ${{ steps.update.outputs.branch_name }}
+      run: git checkout -b "$BRANCH"
       shell: bash
 
     - name: Commit changes
@@ -200,7 +203,9 @@ runs:
     - name: Push branch
       if: steps.update.outputs.has_changes == 'true'
       working-directory: helm-charts
-      run: git push --set-upstream origin "${{ steps.update.outputs.branch_name }}"
+      env:
+        BRANCH: ${{ steps.update.outputs.branch_name }}
+      run: git push --set-upstream origin "$BRANCH"
       shell: bash
 
     - name: Create pull request
@@ -222,7 +227,7 @@ runs:
         RELEASE_URL="https://github.com/${SOURCE_REPO}/releases/tag/${APP_VERSION}"
         PR_BODY="Automated update for ${APP_NAME} to version [${APP_VERSION}](${RELEASE_URL})."
         if [ "${SETTINGS_CHANGED}" = "true" ]; then
-          SECTION=$(python3 "${{ github.action_path }}/render_pr_section.py" \
+          SECTION=$(python3 "$GITHUB_ACTION_PATH/render_pr_section.py" \
             --source-repo "${SOURCE_REPO}" \
             --release-tag "${APP_VERSION}" \
             --readme-path "${README_PATH}" \

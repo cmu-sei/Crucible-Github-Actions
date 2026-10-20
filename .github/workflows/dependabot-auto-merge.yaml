@@ -1,0 +1,94 @@
+# Approve and queue auto-merge for Dependabot patch updates.
+#
+# Only acts on pull requests authored by `dependabot[bot]` in
+# cmu-sei/Crucible-Github-Actions (forks and other authors are skipped).
+# Patch updates, as classified by Dependabot's own update-type
+# metadata, are approved and queued for auto-merge (squash); minor and major
+# updates are left for a human to review.
+#
+# The approval and merge are performed with a token minted from the org's
+# `crucible-ci` GitHub App rather than GITHUB_TOKEN. Merges made with
+# GITHUB_TOKEN do not trigger `push` workflows; merges made under the App do,
+# so the resulting push to `main` runs workflows such as Auto release. The App
+# must be installed on this repository, and CRUCIBLE_HELM_UPDATE_CLIENT_ID /
+# CRUCIBLE_HELM_UPDATE_PRIVATE_KEY must be available as **Dependabot** secrets
+# for this repository: `pull_request` runs for Dependabot-authored PRs receive
+# Dependabot secrets, not Actions secrets. GITHUB_TOKEN is only used to read.
+#
+# This workflow never checks out code, so nothing from the pull request is
+# executed; it only reads Dependabot's metadata and calls the GitHub API.
+#
+# Depends on these repository settings, configured in this order:
+# 1. Required status checks on `main` (actionlint, codeql-plan-tests,
+#    update-helm-chart-tests, codeql / Plan languages,
+#    codeql / Analyze (python), codeql / Analyze (actions)), so auto-merge
+#    waits for CI to pass.
+# 2. "Allow auto-merge" enabled.
+# If auto-merge is disabled the merge step fails on purpose so the
+# misconfiguration is visible. If auto-merge is enabled but no required
+# checks are configured, the App's approval satisfies the review rule and the
+# merge can proceed immediately, before CI finishes; hence the order above.
+
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'cmu-sei/Crucible-Github-Actions'
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Leave non-patch update for review
+        if: steps.meta.outputs.update-type != 'version-update:semver-patch'
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: echo "::notice::Leaving $UPDATE_TYPE update for human review."
+
+      - name: Check App credentials
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          CLIENT_ID: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
+        run: |
+          if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            exit 0
+          fi
+          echo "::error::App credentials not available — ensure CRUCIBLE_HELM_UPDATE_CLIENT_ID/PRIVATE_KEY are Dependabot secrets scoped to this repository"
+          exit 1
+
+      - name: Mint crucible-ci App token
+        id: app-token
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
+          private-key: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          # Narrow the token to what approve + auto-merge need (least privilege).
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Approve and enable auto-merge
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
+          gh pr review --approve "$PR_URL" --body "Auto-approved: Dependabot $UPDATE_TYPE update ($DEPS)."
+          gh pr merge --auto --squash "$PR_URL"
