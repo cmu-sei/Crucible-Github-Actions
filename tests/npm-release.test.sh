@@ -46,7 +46,7 @@ check() { # check <name> <condition-command...>
 t() { run_step VERSION=1.2.3; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
 check "version: 1.2.3 accepted" t
 
-t() { run_step VERSION=v2.0.0-rc.1; [ "$rc" = 0 ] && [ "$(out_val version)" = 2.0.0-rc.1 ]; }
+t() { run_step VERSION=v2.0.0-rc.1 DIST_TAG=next; [ "$rc" = 0 ] && [ "$(out_val version)" = 2.0.0-rc.1 ]; }
 check "version: leading v stripped (v2.0.0-rc.1 -> 2.0.0-rc.1)" t
 
 t() { run_step 'VERSION=1.2.3;id'; [ "$rc" = 1 ] && grep -q "is not a SemVer version" "$ERR" && [ ! -s "$OUT" ]; }
@@ -57,6 +57,12 @@ check "version: leading space rejected" t
 
 t() { run_step DIST_TAG=next; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
 check "dist-tag: next accepted" t
+
+t() { run_step VERSION=2.0.0-rc.1; [ "$rc" = 1 ] && grep -q "needs a dist-tag" "$ERR" && [ ! -s "$OUT" ]; }
+check "dist-tag: prerelease without dist-tag rejected" t
+
+t() { run_step VERSION=1.2.3+build.5; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3+build.5 ]; }
+check "version: build metadata is not a prerelease" t
 
 t() { run_step 'DIST_TAG=Bad Tag'; [ "$rc" = 1 ] && grep -q "invalid dist-tag" "$ERR" && [ ! -s "$OUT" ]; }
 check "dist-tag: 'Bad Tag' rejected" t

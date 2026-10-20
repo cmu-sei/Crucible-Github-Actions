@@ -332,7 +332,7 @@ Inputs are passed to scripts through environment variables only, and the version
 | Name | Required | Description | Default |
 | --- | --- | --- | --- |
 | `version` | ✅ | Package version (SemVer). A leading `v` is stripped. | |
-| `dist-tag` |  | npm dist-tag (required by npm for prerelease versions, e.g. `next` or `rc`). Must match `^[a-z][a-z0-9._-]*$`. | `""` |
+| `dist-tag` |  | npm dist-tag, e.g. `next` or `rc`. Required for prerelease versions (`X.Y.Z-…`): npm refuses to publish them without `--tag`, so the workflow fails at validation instead. Must match `^[a-z][a-z0-9._-]*$`. | `""` |
 | `version-dirs` |  | Newline-separated directories whose `package.json` gets the version (root first). | `.` |
 | `build-command` |  | Shell command that installs dependencies and builds the package. | `npm ci && npm run build` |
 | `publish-path` | ✅ | Directory or `.tgz` to publish. `{version}` is replaced with the version. | |
@@ -350,7 +350,7 @@ Inputs are passed to scripts through environment variables only, and the version
 
 #### Required Permissions
 
-The workflow declares the most it may use (`contents: write`, `id-token: write`); a called workflow's token is capped by the caller's grant, so the calling job grants only what it uses: `contents: read` (or `contents: write` with `commit-version: true`) plus `id-token: write` when `provenance` is `true`.
+The shared workflow declares no permissions block, so its job inherits the calling job's grant (a called workflow that declares more than its caller grants fails to start, which would break read-only callers). The calling job grants only what it uses: `contents: read` (or `contents: write` with `commit-version: true`) plus `id-token: write` when `provenance` is `true`.
 
 #### Example Usage
 

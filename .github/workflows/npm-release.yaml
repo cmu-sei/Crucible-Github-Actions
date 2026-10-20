@@ -64,12 +64,12 @@ on:
         description: "npm automation/granular token (auth-mode: api-key)."
         required: false
 
-# The maximum this workflow may use. A called workflow's token is capped by the
-# caller's grant, so callers grant only what they use: `contents: read` (or
-# `contents: write` with commit-version) plus `id-token: write` for provenance.
-permissions:
-  contents: write
-  id-token: write
+# No permissions block on purpose: the job inherits the caller's grant. A
+# called workflow that declares more than its caller grants fails to start
+# ("The workflow is requesting 'contents: write', but is only allowed
+# 'contents: read'"), so a block here would break read-only callers. Callers
+# grant `contents: read` (or `contents: write` with commit-version), plus
+# `id-token: write` for provenance.
 
 concurrency:
   group: npm-release-${{ github.repository }}
@@ -92,7 +92,9 @@ jobs:
           VERSION="${VERSION#v}"
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
           [[ "$VERSION" =~ $semver ]] || { echo "::error::'$VERSION' is not a SemVer version"; exit 1; }
+          prerelease="${BASH_REMATCH[4]}"
           [[ -z "$DIST_TAG" || "$DIST_TAG" =~ ^[a-z][a-z0-9._-]*$ ]] || { echo "::error::invalid dist-tag '$DIST_TAG'"; exit 1; }
+          [[ -z "$prerelease" || -n "$DIST_TAG" ]] || { echo "::error::prerelease version '$VERSION' needs a dist-tag (e.g. next); npm refuses to publish a prerelease without --tag"; exit 1; }
           [[ "$AUTH_MODE" =~ ^(api-key|trusted)$ ]] || { echo "::error::auth-mode must be api-key or trusted"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
