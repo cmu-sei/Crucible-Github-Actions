@@ -6,7 +6,7 @@ updates:
       - "/actions/header"
       - "/actions/update-helm-chart"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
     groups:
       github-actions:
         patterns:
