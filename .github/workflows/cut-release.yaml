@@ -6,7 +6,7 @@
 #
 # Dispatching this workflow (from main only) with a family and an X.Y.Z
 # version -- or calling it from another workflow running on main, as
-# auto-release.yaml does for patch releases:
+# auto-release.yaml does on merges to main:
 #   1. refuses to run if `<family>-vX.Y.Z` already exists,
 #   2. creates the annotated tag `<family>-vX.Y.Z` at the dispatched SHA,
 #   3. force-moves the floating tags `<family>-vX` and `<family>-vX.Y`
