@@ -154,9 +154,11 @@ jobs:
           set -euo pipefail
           package_id="$(dotnet msbuild "$PROJECT" -getProperty:PackageId)"
           [ -n "$package_id" ] || { echo "::error::Could not read PackageId from $PROJECT"; exit 1; }
+          tag="${RELEASE_TAG:-$package_id.$VERSION}"
+          echo "PackageId: $package_id; version: $VERSION; release tag: $tag"
           {
             echo "package_id=$package_id"
-            echo "tag=${RELEASE_TAG:-$package_id.$VERSION}"
+            echo "tag=$tag"
             echo "client_dir=$(dirname "$PROJECT")"
           } >> "$GITHUB_OUTPUT"
 
