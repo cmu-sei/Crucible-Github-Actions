@@ -323,7 +323,7 @@ Migration notes:
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job and the NuGet workflows' input validation), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
