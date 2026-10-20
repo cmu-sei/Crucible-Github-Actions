@@ -1,0 +1,268 @@
+# Reusable NuGet package release workflow for Crucible repositories.
+#
+# Pipeline shape (single job): validate -> setup .NET -> resolve metadata ->
+# (generate OpenAPI client) -> pack -> upload artifact -> push -> (unlist) ->
+# GitHub release/tag. `dry-run: true` stops after the artifact upload.
+#
+# Covers both shapes in use today:
+#   * API client packages: build the API, export its OpenAPI document,
+#     run NSwag to generate the client, then pack the client project
+#     (set `openapi-project`).
+#   * Plain libraries (crucible-common-dotnet): pack the project directly.
+#
+# Order is build -> pack -> push -> (unlist) -> GitHub release/tag, so a failed
+# push never leaves an orphaned tag behind.
+#
+# Authentication: `auth-mode: api-key` (default) uses the NUGET_APIKEY secret.
+# `auth-mode: trusted` uses NuGet trusted publishing (OIDC via NuGet/login) and
+# needs no secret, but the caller must grant `id-token: write`. Switching later
+# is a caller-only change.
+
+name: NuGet Release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Package version (SemVer, e.g. 1.2.3 or 1.2.3-rc.1). A leading 'v' is stripped."
+        type: string
+        required: true
+      project:
+        description: "Path to the .csproj to pack, e.g. Alloy.Api.Client/Alloy.Api.Client.csproj"
+        type: string
+        required: true
+      openapi-project:
+        description: "API project directory. When set, the OpenAPI document is exported from it and NSwag is run in the client project's directory."
+        type: string
+        default: ""
+      openapi-assembly:
+        description: "API assembly name (defaults to the openapi-project directory name)."
+        type: string
+        default: ""
+      openapi-document:
+        description: "Swagger document name passed to `dotnet swagger tofile`."
+        type: string
+        default: v1
+      openapi-output:
+        description: "File name NSwag reads, written next to the client project (swagger.json, or openapi.json for TopoMojo)."
+        type: string
+        default: swagger.json
+      dotnet-version:
+        description: "SDK to install when the repo has no global.json (e.g. 10.0.x). Leave empty to use global.json."
+        type: string
+        default: ""
+      description:
+        description: "Package description (defaults to the project's own <Description>)."
+        type: string
+        default: ""
+      include-symbols:
+        description: "Also produce and push a .snupkg symbols package."
+        type: boolean
+        default: false
+      unlist:
+        description: "Unlist the version on nuget.org right after pushing (API client convention)."
+        type: boolean
+        default: false
+      github-release:
+        description: "release = tag + GitHub release with the .nupkg attached; tag = tag only; none = skip."
+        type: string
+        default: release
+      release-tag:
+        description: "Tag name. Defaults to <PackageId>.<version>."
+        type: string
+        default: ""
+      auth-mode:
+        description: "api-key (NUGET_APIKEY secret) or trusted (NuGet trusted publishing; caller grants id-token: write)."
+        type: string
+        default: api-key
+      nuget-user:
+        description: "nuget.org account that owns the trusted-publishing policy (auth-mode: trusted only)."
+        type: string
+        default: ""
+      dry-run:
+        description: "Build and pack only; skip push, unlist and GitHub release. Use to validate a caller."
+        type: boolean
+        default: false
+    secrets:
+      NUGET_APIKEY:
+        description: "nuget.org push key (auth-mode: api-key)."
+        required: false
+      NUGET_APIKEY_UNLIST:
+        description: "nuget.org key with unlist scope (unlist: true)."
+        required: false
+    outputs:
+      package-id:
+        description: "Resolved PackageId"
+        value: ${{ jobs.release.outputs.package-id }}
+      version:
+        description: "Normalized version"
+        value: ${{ jobs.release.outputs.version }}
+
+# `contents: write` creates the tag / GitHub release. A called workflow can
+# only downgrade (never elevate) the caller's grant, so callers must grant
+# `contents: write` on the calling job. auth-mode trusted additionally needs
+# `id-token: write`, which this block does not request yet: add it here when
+# trusted publishing is switched on (all callers then have to grant it).
+permissions:
+  contents: write
+
+concurrency:
+  group: nuget-release-${{ github.repository }}-${{ inputs.project }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release ${{ inputs.project }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      package-id: ${{ steps.meta.outputs.package_id }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          VERSION: ${{ inputs.version }}
+          AUTH_MODE: ${{ inputs.auth-mode }}
+          GITHUB_RELEASE: ${{ inputs.github-release }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          [[ "$VERSION" =~ $semver ]] || { echo "::error::'$VERSION' is not a SemVer version"; exit 1; }
+          [[ "$AUTH_MODE" =~ ^(api-key|trusted)$ ]] || { echo "::error::auth-mode must be api-key or trusted"; exit 1; }
+          [[ "$GITHUB_RELEASE" =~ ^(release|tag|none)$ ]] || { echo "::error::github-release must be release, tag or none"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}   # empty = use global.json
+
+      - name: Resolve package metadata
+        id: meta
+        env:
+          PROJECT: ${{ inputs.project }}
+          VERSION: ${{ steps.validate.outputs.version }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          package_id="$(dotnet msbuild "$PROJECT" -getProperty:PackageId)"
+          [ -n "$package_id" ] || { echo "::error::Could not read PackageId from $PROJECT"; exit 1; }
+          {
+            echo "package_id=$package_id"
+            echo "tag=${RELEASE_TAG:-$package_id.$VERSION}"
+            echo "client_dir=$(dirname "$PROJECT")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node (NSwag)
+        if: inputs.openapi-project != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Generate OpenAPI client
+        if: inputs.openapi-project != ''
+        env:
+          API_DIR: ${{ inputs.openapi-project }}
+          API_ASSEMBLY: ${{ inputs.openapi-assembly }}
+          DOC: ${{ inputs.openapi-document }}
+          OUT: ${{ inputs.openapi-output }}
+          CLIENT_DIR: ${{ steps.meta.outputs.client_dir }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          API_ASSEMBLY="${API_ASSEMBLY:-$(basename "$API_DIR")}"
+          # The dotnet-tools manifest (swashbuckle CLI) lives in the API dir in most repos.
+          (cd "$API_DIR" && dotnet tool restore)
+          dotnet build "$API_DIR" -c Release -p:Version="$VERSION"
+          dll="$(find "$API_DIR/bin/Release" -name "$API_ASSEMBLY.dll" -print -quit)"
+          (cd "$API_DIR" && dotnet swagger tofile --output "$GITHUB_WORKSPACE/$CLIENT_DIR/$OUT" "$GITHUB_WORKSPACE/$dll" "$DOC")
+          cd "$CLIENT_DIR"
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          # Runtime comes from nswag.json, so it can't drift from the project.
+          npx --no-install nswag run
+
+      - name: Pack
+        env:
+          PROJECT: ${{ inputs.project }}
+          VERSION: ${{ steps.validate.outputs.version }}
+          DESCRIPTION: ${{ inputs.description }}
+          SYMBOLS: ${{ inputs.include-symbols }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          args=(-c Release -o artifacts
+            -p:PackageVersion="$VERSION" -p:Version="$VERSION"
+            -p:Authors="Carnegie Mellon University/Software Engineering Institute"
+            -p:Company="Carnegie Mellon University/Software Engineering Institute"
+            -p:PackageLicenseExpression=MIT
+            -p:PackageProjectUrl=https://github.com/cmu-sei/crucible
+            -p:RepositoryType=git -p:RepositoryUrl="$REPO_URL"
+            -p:RepositoryCommit="$GITHUB_SHA")
+          if [ -n "$DESCRIPTION" ]; then args+=(-p:Description="$DESCRIPTION"); fi
+          if [ "$SYMBOLS" = "true" ]; then args+=(-p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg); fi
+          dotnet pack "$PROJECT" "${args[@]}"
+          ls -l artifacts
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nupkg-${{ steps.meta.outputs.package_id }}-${{ steps.validate.outputs.version }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: NuGet login (trusted publishing)
+        id: nuget-login
+        if: inputs.auth-mode == 'trusted' && !inputs.dry-run
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ inputs.nuget-user }}
+
+      - name: Push to nuget.org
+        if: "!inputs.dry-run"
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY || secrets.NUGET_APIKEY }}
+          PACKAGE_ID: ${{ steps.meta.outputs.package_id }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$NUGET_API_KEY" ] || { echo "::error::No NuGet credential: pass NUGET_APIKEY or use auth-mode: trusted"; exit 1; }
+          # The matching .snupkg (if any) is pushed automatically alongside the .nupkg.
+          dotnet nuget push "artifacts/$PACKAGE_ID.$VERSION.nupkg" \
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Unlist on nuget.org
+        if: inputs.unlist && !inputs.dry-run
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_APIKEY_UNLIST }}
+          PACKAGE_ID: ${{ steps.meta.outputs.package_id }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$NUGET_API_KEY" ] || { echo "::error::unlist: true requires the NUGET_APIKEY_UNLIST secret"; exit 1; }
+          dotnet nuget delete "$PACKAGE_ID" "$VERSION" --non-interactive \
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+      - name: Create GitHub release / tag
+        if: inputs.github-release != 'none' && !inputs.dry-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.github-release }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PACKAGE_ID: ${{ steps.meta.outputs.package_id }}
+          VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = release ]; then
+            gh release create "$TAG" artifacts/*.nupkg --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "$PACKAGE_ID $VERSION" \
+              --notes "Published $PACKAGE_ID $VERSION to nuget.org."
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
+          fi
