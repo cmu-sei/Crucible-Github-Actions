@@ -343,7 +343,7 @@ The approval and merge are performed with a token minted from the org's `crucibl
 - The `crucible-ci` App installed on this repository (Contents and Pull requests read/write); the minted token is narrowed to only those two permissions.
 - `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). `pull_request` runs for PRs authored by `dependabot[bot]` receive Dependabot secrets, not Actions secrets. If they are missing, the workflow fails with an explicit error before minting a token.
 
-An auto-merged bump only lands on `main`; consumers on floating tags do not see it until a `Cut release` run is dispatched for each affected family (see [Releasing](#releasing)).
+Because an auto-merge does not trigger `push` workflows, an auto-merged bump is released by the next scheduled **Auto release** run (within about 6 hours), which cuts a patch release for each affected family (see [Releasing](#releasing)).
 
 ## Releasing
 
@@ -367,7 +367,21 @@ Every release produces three tags, all pointing at the same commit:
 
 Consumers should pin the floating major tag (for example `@docker-v1`) so they pick up fixes automatically, and only change their reference for a new major version.
 
-Merging to `main` does **not** release anything. Every merge that touches a family must be followed by a dispatch of the **Cut release** workflow (`.github/workflows/cut-release.yaml`) for that family, otherwise consumers on the floating tag never see the change:
+Merging to `main` automatically cuts the next release for every family whose files changed since its latest `<family>-vX.Y.Z` tag (the **Auto release** workflow, `.github/workflows/auto-release.yaml`); families without a release tag yet are skipped. It also runs every 6 hours because merges performed with `GITHUB_TOKEN` (such as the Dependabot auto-merge) do not trigger `push` workflows, so those changes are released within about 6 hours. A manual **Auto release** dispatch with `dry-run` reports what would be released without cutting anything.
+
+### Choosing the version bump
+
+By default a merge to `main` cuts a PATCH release for each changed family. To cut a minor or major release instead, include `[release:minor]` or `[release:major]` in the PR title (or in any commit message in the PR); squash merges carry the PR title into the merge commit. `[release:skip]` holds the release for a manual `Cut release` dispatch, for example to coordinate several PRs into one release.
+
+| Marker | Release from `1.4.2` |
+| --- | --- |
+| `[release:minor]` | `1.5.0` |
+| `[release:major]` | `2.0.0` |
+| `[release:skip]` | none |
+
+Markers are case-insensitive and only count on commits that touch the family's files. When several PRs are merged before the workflow runs (for example between schedule ticks), the highest bump wins, and `[release:skip]` wins over all.
+
+To release a specific version by hand (for example after a `[release:skip]`), dispatch the **Cut release** workflow (`.github/workflows/cut-release.yaml`):
 
 ```bash
 gh workflow run cut-release.yaml -R cmu-sei/Crucible-Github-Actions -f family=<family> -f version=X.Y.Z
