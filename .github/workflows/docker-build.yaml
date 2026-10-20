@@ -495,6 +495,8 @@ jobs:
       # hashes (see build job's Export step).
       - name: Create primary manifest list
         working-directory: /tmp/digests/default
+        env:
+          IMAGE_NAME: ${{ inputs.imageName }}
         run: |
           set -euo pipefail
           TAG_ARGS=()
@@ -506,7 +508,7 @@ jobs:
           SRC_ARGS=()
           for f in *; do
             [[ -e "$f" ]] || continue
-            SRC_ARGS+=("${{ inputs.imageName }}@sha256:${f}")
+            SRC_ARGS+=("${IMAGE_NAME}@sha256:${f}")
           done
 
           if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
@@ -527,6 +529,8 @@ jobs:
       - name: Create additional target manifest list
         if: needs.prepare.outputs.has_additional_target == 'true'
         working-directory: /tmp/digests/additional
+        env:
+          IMAGE_NAME: ${{ inputs.imageName }}
         run: |
           set -euo pipefail
           TAG_ARGS=()
@@ -538,7 +542,7 @@ jobs:
           SRC_ARGS=()
           for f in *; do
             [[ -e "$f" ]] || continue
-            SRC_ARGS+=("${{ inputs.imageName }}@sha256:${f}")
+            SRC_ARGS+=("${IMAGE_NAME}@sha256:${f}")
           done
 
           if [[ ${#SRC_ARGS[@]} -eq 0 ]]; then
