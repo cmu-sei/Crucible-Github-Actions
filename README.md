@@ -321,6 +321,12 @@ Migration notes:
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
 - The `actions/unpinned-tag` query is in the central exclusion list (merged into `query-filters` by the `plan` job, and not removable by callers) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
 
+## Continuous integration
+
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows and composite actions, `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+
+The `main` ruleset should list these as required status checks: `CI / actionlint`, `CI / codeql-plan-tests`, `CI / update-helm-chart-tests`, plus the `CodeQL` analysis jobs.
+
 ## Releasing
 
 Each action family in this repository is versioned independently. Releases are tagged per family:

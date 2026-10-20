@@ -4,4 +4,4 @@
 
 Run from the repository root with `bash tests/codeql-plan.test.sh` (needs `bash`, `awk`, `jq`). It prints one PASS/FAIL line per case and exits non-zero on any failure.
 
-Not wired into CI yet.
+Runs in CI as the `CI / codeql-plan-tests` job (`.github/workflows/ci.yaml`); see "Continuous integration" in the top-level README.
