@@ -98,13 +98,10 @@ on:
         description: "Normalized version"
         value: ${{ jobs.release.outputs.version }}
 
-# `contents: write` creates the tag / GitHub release. A called workflow can
-# only downgrade (never elevate) the caller's grant, so callers must grant
-# `contents: write` on the calling job. auth-mode trusted additionally needs
-# `id-token: write`, which this block does not request yet: add it here when
-# trusted publishing is switched on (all callers then have to grant it).
-permissions:
-  contents: write
+# No permissions block here on purpose: a called workflow that declares more
+# than its caller grants fails at startup, so jobs inherit the caller's grant
+# instead. Callers grant `contents: write` (release/tag), plus `id-token: write`
+# for auth-mode trusted; a dry-run caller may grant read-only (`contents: read`).
 
 concurrency:
   group: nuget-release-${{ github.repository }}-${{ inputs.project }}

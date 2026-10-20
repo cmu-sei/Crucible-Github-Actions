@@ -395,12 +395,15 @@ Both are optional at the workflow level; which ones a caller needs depends on it
 
 #### Required Permissions
 
-The workflow declares `permissions: contents: write` (tag and GitHub release). A called workflow can only narrow its caller's grant, so the calling job must grant:
+The workflow declares no top-level `permissions:` block on purpose: a called workflow that requests more than its caller grants fails at startup, so the job inherits the calling job's grant. The calling job grants:
 
 ```yaml
 permissions:
-  contents: write
+  contents: write      # tag + GitHub release
+  # id-token: write    # only for auth-mode: trusted
 ```
+
+A `dry-run: true` caller needs nothing beyond `contents: read` (checkout).
 
 #### Example Usage
 
@@ -515,7 +518,7 @@ jobs:
     # secrets: NUGET_APIKEY no longer passed (NUGET_APIKEY_UNLIST still needed for unlist)
 ```
 
-The shared workflow's top-level `permissions:` must also gain `id-token: write` at that point (it is not requested today, so api-key callers need not grant it). Open questions before switching:
+The shared workflow inherits the caller's grant, so nothing changes in it; api-key callers do not grant `id-token: write`. Open questions before switching:
 
 - How nuget.org trusted-publishing policies identify a reusable workflow: whether the policy names the caller's workflow file or this repository's `nuget-release.yaml`.
 - Whether the short-lived key issued by `NuGet/login` has unlist scope; until confirmed, `unlist: true` callers keep passing `NUGET_APIKEY_UNLIST`.
