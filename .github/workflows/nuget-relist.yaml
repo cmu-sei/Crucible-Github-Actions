@@ -1,0 +1,67 @@
+# Reusable workflow that re-lists a previously unlisted package version on
+# nuget.org for Crucible repositories.
+#
+# Pairs with nuget-release.yaml `unlist: true` (the API client convention:
+# client packages are pushed unlisted, then listed once the matching API
+# release ships).
+#
+# Pipeline shape (single job): validate inputs -> POST to the nuget.org v2
+# relist endpoint. There is no dry-run: the endpoint needs the
+# NUGET_APIKEY_UNLIST key (a key with unlist scope).
+
+name: NuGet Relist
+
+on:
+  workflow_call:
+    inputs:
+      package-id:
+        description: "NuGet package id, e.g. Alloy.Api.Client"
+        type: string
+        required: true
+      version:
+        description: "Version to re-list (SemVer; a leading 'v' is stripped)."
+        type: string
+        required: true
+    secrets:
+      NUGET_APIKEY_UNLIST:
+        description: "nuget.org key with unlist scope."
+        required: true
+
+# Talks only to nuget.org; no GITHUB_TOKEN scopes needed.
+permissions: {}
+
+jobs:
+  relist:
+    name: Relist ${{ inputs.package-id }} ${{ inputs.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          PACKAGE_ID: ${{ inputs.package-id }}
+          VERSION: ${{ inputs.version }}
+        # Error messages never echo the raw input (a newline in it could
+        # inject workflow commands).
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          [[ "$PACKAGE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::package-id input is not a valid NuGet package id (expected like Alloy.Api.Client)"; exit 1; }
+          [[ "$VERSION" =~ $semver ]] || { echo "::error::Version input is not a valid SemVer version (expected like 1.2.3 or 1.2.3-rc.1)"; exit 1; }
+          echo "package_id=$PACKAGE_ID" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Relist package
+        env:
+          PACKAGE_ID: ${{ steps.validate.outputs.package_id }}
+          VERSION: ${{ steps.validate.outputs.version }}
+          NUGET_API_KEY: ${{ secrets.NUGET_APIKEY_UNLIST }}
+        run: |
+          set -euo pipefail
+          [ -n "$NUGET_API_KEY" ] || { echo "::error::NUGET_APIKEY_UNLIST is empty"; exit 1; }
+          # The key is fed to curl on stdin (-H @-) so it never appears in argv.
+          printf 'X-NuGet-ApiKey: %s\n' "$NUGET_API_KEY" |
+            curl --fail-with-body -sS -X POST -H "Content-Length: 0" -H @- \
+              "https://www.nuget.org/api/v2/package/$PACKAGE_ID/$VERSION"
+          echo "Relisted $PACKAGE_ID $VERSION"

@@ -3,6 +3,23 @@
 Reusable GitHub Actions owned by the Crucible team. Consumers can depend on the actions
 in this repository to keep shared automation consistent across applications.
 
+## Table of contents
+
+- [Available Actions](#available-actions)
+  - [Update Helm Chart](#update-helm-chart)
+  - [Repository Configuration Checklist](#repository-configuration-checklist)
+  - [Header Check](#header-check)
+- [Reusable Workflows](#reusable-workflows)
+  - [Build & Publish Image](#build--publish-image)
+  - [CodeQL](#codeql)
+  - [NuGet Release](#nuget-release)
+  - [NuGet Relist](#nuget-relist)
+  - [npm Release](#npm-release)
+- [Continuous integration](#continuous-integration)
+- [Dependabot](#dependabot)
+- [Releasing](#releasing)
+  - [Choosing the version bump](#choosing-the-version-bump)
+
 ## Available Actions
 
 ### Update Helm Chart
@@ -321,6 +338,244 @@ Migration notes:
 - `swift` analysis needs a macOS runner, so set `runs-on` (for example `macos-15`) for it.
 - The `actions/unpinned-tag` query is in the central exclusion list (merged into `query-filters` by the `plan` job, and not removable by callers) by org decision: consumers reference Crucible-Github-Actions by floating per-family tags (e.g. `@codeql-v1`) so that fixes propagate without a PR in every repository, and the rule would otherwise fire permanently on every caller. Pin third-party actions by commit SHA where you want that guarantee.
 
+### NuGet Release
+
+`.github/workflows/nuget-release.yaml` is a `workflow_call` reusable workflow that builds, packs and publishes a NuGet package to nuget.org, then tags the commit and (by default) creates a GitHub release with the `.nupkg` attached. It replaces the per-repository client-package workflows in the API repositories and crucible-common-dotnet's release + apply-tag pair.
+
+It covers both package shapes in use:
+
+- **API client packages** (set `openapi-project`): build the API, export its OpenAPI document with `dotnet swagger tofile`, run NSwag in the client project's directory to generate the client, then pack the client project.
+- **Plain libraries** (crucible-common-dotnet): pack the project directly.
+
+The job runs validate → setup .NET → resolve metadata → (generate OpenAPI client) → pack → upload artifact → push → (unlist) → GitHub release/tag. Push comes before the tag/release, so a failed push never leaves an orphaned tag. `dry-run: true` stops after the artifact upload (`nupkg-<PackageId>-<version>`), which is how a new caller is validated without credentials.
+
+Package metadata is set at pack time, so nothing is patched into the `.nuspec` afterwards: authors and company `Carnegie Mellon University/Software Engineering Institute`, `PackageLicenseExpression` `MIT`, project URL `https://github.com/cmu-sei/crucible`, and the repository URL/commit of the caller. The package id comes from the project's `PackageId` (the project name unless overridden).
+
+Behaviour the callers rely on:
+
+- The .NET SDK comes from the repository's `global.json`; set `dotnet-version` only for repositories without one.
+- `dotnet tool restore` runs **inside** `openapi-project`, so a `.config/dotnet-tools.json` either there or at the repository root works. The Swashbuckle CLI version in that manifest (`swashbuckle.aspnetcore.cli`) must match the API's `Swashbuckle.AspNetCore` package version.
+- NSwag runs **inside** the client project's directory via `npx --no-install nswag run`, so that directory needs a `package.json` declaring `nswag` (`npm ci` is used when a `package-lock.json` is present, `npm install` otherwise), and `nswag.json` must set `"runtime": "Net100"` (NSwag 14.x).
+- The release tag defaults to `<PackageId>.<version>` (for example `Alloy.Api.Client.1.2.3`), the format the API repositories already use.
+- Versions with SemVer build metadata (`1.2.3+abc`) are rejected: NuGet drops the metadata from the package file name.
+- Runs are serialized per caller repository and `project` (concurrency group, `cancel-in-progress: false`). GitHub still cancels an older *pending* run in the same group when a newer one queues, so dispatch releases of the same project one at a time.
+- `description` may contain `,` and `;` (escaped for MSBuild before `dotnet pack`).
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `version` | ✅ | Package version (SemVer, e.g. `1.2.3` or `1.2.3-rc.1`). A leading `v` is stripped; anything else that is not SemVer fails the run before checkout. | |
+| `project` | ✅ | Path to the `.csproj` to pack, e.g. `Alloy.Api.Client/Alloy.Api.Client.csproj`. | |
+| `openapi-project` |  | API project directory. When set, the OpenAPI document is exported from it and NSwag is run in the client project's directory. | `""` |
+| `openapi-assembly` |  | API assembly name. | `openapi-project` directory name |
+| `openapi-document` |  | Swagger document name passed to `dotnet swagger tofile`. | `v1` |
+| `openapi-output` |  | File name NSwag reads, written next to the client project (`openapi.json` for TopoMojo). | `swagger.json` |
+| `dotnet-version` |  | SDK to install when the repository has no `global.json` (e.g. `10.0.x`). Leave empty to use `global.json`. | `""` |
+| `description` |  | Package description. | the project's own `<Description>` |
+| `include-symbols` |  | Also produce and push a `.snupkg` symbols package. | `false` |
+| `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention; re-list with [NuGet Relist](#nuget-relist)). | `false` |
+| `github-release` |  | `release` = tag + GitHub release with the `.nupkg` attached; `tag` = tag only; `none` = skip. | `release` |
+| `release-tag` |  | Tag name. | `<PackageId>.<version>` |
+| `auth-mode` |  | `api-key` (`NUGET_APIKEY` secret) or `trusted` (NuGet trusted publishing; see [below](#trusted-publishing-later)). | `api-key` |
+| `nuget-user` |  | nuget.org account that owns the trusted-publishing policy (`auth-mode: trusted` only). | `""` |
+| `dry-run` |  | Build and pack only; skip push, unlist and GitHub release. | `false` |
+
+#### Secrets
+
+Both are optional at the workflow level; which ones a caller needs depends on its mode.
+
+| Name | Needed when | Description |
+| --- | --- | --- |
+| `NUGET_APIKEY` | `auth-mode: api-key` and not `dry-run` | nuget.org push key. |
+| `NUGET_APIKEY_UNLIST` | `unlist: true` and not `dry-run` | nuget.org key with unlist scope. |
+
+#### Outputs
+
+| Name | Description |
+| --- | --- |
+| `package-id` | Resolved `PackageId`. |
+| `version` | Normalized version (leading `v` stripped). |
+
+#### Required Permissions
+
+The workflow declares no top-level `permissions:` block on purpose: a called workflow that requests more than its caller grants fails at startup, so the job inherits the calling job's grant. The calling job grants:
+
+```yaml
+permissions:
+  contents: write      # tag + GitHub release
+  # id-token: write    # only for auth-mode: trusted
+```
+
+A `dry-run: true` caller needs nothing beyond `contents: read` (checkout).
+
+#### Example Usage
+
+API repository (`.github/workflows/build-client.yml`), shown for alloy.api:
+
+```yaml
+name: Build Client Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      clientVersion:
+        description: "Version of the Client package"
+        required: true
+
+permissions: {}
+
+jobs:
+  release:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@nuget-v1
+    permissions:
+      contents: write          # tag + GitHub release with the .nupkg
+    with:
+      version: ${{ inputs.clientVersion }}
+      project: Alloy.Api.Client/Alloy.Api.Client.csproj
+      openapi-project: Alloy.Api
+      description: NSwag generated client for Crucible's Alloy.Api
+      unlist: true
+    secrets:
+      NUGET_APIKEY: ${{ secrets.NUGET_APIKEY }}
+      NUGET_APIKEY_UNLIST: ${{ secrets.NUGET_APIKEY_UNLIST }}
+```
+
+Library repository (crucible-common-dotnet `.github/workflows/release-package.yml`, replacing its push-to-nuget job and `apply-tag.yml`):
+
+```yaml
+name: Release package to NuGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      packageName:
+        description: "The NuGet package (which corresponds to a Crucible.Common project) you want to release"
+        required: true
+        type: choice
+        options:
+          - Crucible.Common.Authentication
+          - Crucible.Common.EntityEvents
+          - Crucible.Common.ServiceDefaults
+          - Crucible.Common.Utilities
+      versionNumber:
+        description: "A semver version string (e.g. 1.0.0)"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/build-and-test.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: build-and-test
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@nuget-v1
+    permissions:
+      contents: write          # tag (created only after a successful push)
+    with:
+      version: ${{ inputs.versionNumber }}
+      project: src/${{ inputs.packageName }}/${{ inputs.packageName }}.csproj
+      include-symbols: true
+      dotnet-version: "10.0.x"     # repo has no global.json
+      github-release: tag
+      release-tag: ${{ inputs.packageName }}-${{ inputs.versionNumber }}
+    secrets:
+      NUGET_APIKEY: ${{ secrets.NUGET_APIKEY }}
+```
+
+In the library example, `release-tag` is built from the raw `versionNumber` input, so give `versionNumber` without a leading `v` (otherwise the tag carries it); the shared workflow normalizes `version` itself (strips a leading `v`), but not a caller-built `release-tag`.
+
+To validate a new caller without credentials, add `dry-run: true` under `with:` and dispatch it once; the packed `.nupkg` is uploaded as a run artifact.
+
+#### Per-repository values
+
+| Repository | `project` | `openapi-project` | Notes |
+| --- | --- | --- | --- |
+| alloy.api | `Alloy.Api.Client/Alloy.Api.Client.csproj` | `Alloy.Api` | Set `nswag.json` `runtime` to `Net100`, bump `nswag` to 14.x in the client `package.json` (commit a `package-lock.json`), bump the client's `System.Text.Json` to 10.0.0 (NSwag 14 emits `JsonStringEnumConverter<T>`), and bump `swashbuckle.aspnetcore.cli` in `Alloy.Api/.config/dotnet-tools.json` from 6.8.1 to the API's Swashbuckle version (10.1.0). |
+| blueprint.api | `Blueprint.Api.Client/Blueprint.Api.Client.csproj` | `Blueprint.Api` | Same `nswag.json` runtime / `nswag` 14.x changes as alloy.api (`System.Text.Json` is already 10.0.0 via `Directory.Packages.props`). The repository has no `dotnet-tools.json`: add one (root or `Blueprint.Api/.config/`) with `swashbuckle.aspnetcore.cli` at the API's Swashbuckle version (10.0.1). |
+| cite.api | `Cite.Api.Client/Cite.Api.Client.csproj` | `Cite.Api` | |
+| gallery.api | `Gallery.Api.Client/Gallery.Api.Client.csproj` | `Gallery.Api` | |
+| steamfitter.api | `Steamfitter.Api.Client/Steamfitter.Api.Client.csproj` | `Steamfitter.Api` | |
+| player.api | `Player.Api.Client/Player.Api.Client.csproj` | `Player.Api` | |
+| caster.api | `src/Caster.Api.Client/Caster.Api.Client.csproj` | `src/Caster.Api` | |
+| vm.api | `src/Player.Vm.Api.Client/Player.Vm.Api.Client.csproj` | `src/Player.Vm.Api` | |
+| topomojo | `src/TopoMojo.Api.Client/TopoMojo.Api.Client.csproj` | `src/TopoMojo.Api` | Also `openapi-output: openapi.json` and `dotnet-version: "10.0.x"`; add a client `package.json` declaring `nswag`. |
+
+#### Trusted publishing (later)
+
+Today every caller uses `auth-mode: api-key`. NuGet trusted publishing (OIDC via `NuGet/login`, exchanging the job's GitHub token for a short-lived push key) is already wired into the workflow so switching is mostly a caller change:
+
+```yaml
+# Phase 2 (trusted publishing): the only change in each caller
+jobs:
+  release:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@nuget-v1
+    permissions:
+      contents: write
+      id-token: write          # NEW: lets NuGet/login exchange the OIDC token
+    with:
+      # ...unchanged inputs...
+      auth-mode: trusted       # NEW
+      nuget-user: <nuget.org account that owns the trusted-publishing policy>
+    # secrets: NUGET_APIKEY no longer passed (NUGET_APIKEY_UNLIST still needed for unlist)
+```
+
+The shared workflow inherits the caller's grant, so nothing changes in it; api-key callers do not grant `id-token: write`. Open questions before switching:
+
+- How nuget.org trusted-publishing policies identify a reusable workflow: whether the policy names the caller's workflow file or this repository's `nuget-release.yaml`.
+- Whether the short-lived key issued by `NuGet/login` has unlist scope; until confirmed, `unlist: true` callers keep passing `NUGET_APIKEY_UNLIST`.
+
+### NuGet Relist
+
+`.github/workflows/nuget-relist.yaml` is a `workflow_call` reusable workflow that re-lists a previously unlisted package version on nuget.org. It pairs with `nuget-release.yaml` `unlist: true`: API client packages are pushed unlisted, then listed once the matching API release ships. It validates `package-id` and `version` (same SemVer rule as NuGet Release) before calling nuget.org. There is no dry-run: the call needs the unlist-scoped key.
+
+#### Inputs
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `package-id` | ✅ | NuGet package id, e.g. `Alloy.Api.Client`. |
+| `version` | ✅ | Version to re-list (SemVer; a leading `v` is stripped). |
+
+#### Secrets
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `NUGET_APIKEY_UNLIST` | ✅ | nuget.org key with unlist scope. |
+
+#### Required Permissions
+
+None: the workflow declares `permissions: {}` and talks only to nuget.org.
+
+#### Example Usage
+
+API repository (`.github/workflows/list-package.yml`):
+
+```yaml
+name: List Client Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      clientVersion:
+        description: "Version of the Client package"
+        required: true
+
+permissions: {}
+
+jobs:
+  relist:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-relist.yaml@nuget-v1
+    with:
+      package-id: Alloy.Api.Client
+      version: ${{ inputs.clientVersion }}
+    secrets:
+      NUGET_APIKEY_UNLIST: ${{ secrets.NUGET_APIKEY_UNLIST }}
+```
+
 ### npm Release
 
 `.github/workflows/npm-release.yaml` is a `workflow_call` reusable workflow that publishes an npm package for Crucible libraries (Crucible.Common.Ui, console-forge). One job validates the inputs, sets the version in each listed `package.json` (`npm version --no-git-tag-version`), runs the caller's build command, optionally commits the version bump back to the triggering branch, and runs `npm publish` (with `--access public`, the dist-tag if given, and `--provenance` by default).
@@ -421,7 +676,7 @@ Provenance and trusted publishing are different things. **Provenance** (`--prove
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), `tests/codeql-plan.test.sh` against the shared CodeQL workflow's plan job, and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job and the NuGet and npm workflows' input validation), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
@@ -453,8 +708,8 @@ Each action family in this repository is versioned independently. Releases are t
 | `header` | Header Check composite action | `header-v1.0.1` |
 | `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.2.0` |
 | `codeql` | `.github/workflows/codeql.yaml` | `codeql-v1.0.0` |
+| `nuget` | `.github/workflows/nuget-release.yaml`, `nuget-relist.yaml` | `nuget-v1.0.0` |
 | `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
-| `nuget` | Reserved for an upcoming family | `nuget-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 
