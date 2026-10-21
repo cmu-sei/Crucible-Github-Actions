@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
 
       - name: Run codeql plan tests
-        run: bash tests/codeql-plan.test.sh
+        run: for t in tests/*.test.sh; do echo "== $t"; bash "$t"; done
 
   update-helm-chart-tests:
     runs-on: ubuntu-24.04
