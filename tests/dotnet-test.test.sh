@@ -50,13 +50,13 @@ check() { # check <name> <condition-command...>
 mkdir -p "$WORK"
 
 # ---- Validate inputs ----
-t() { run_step validate TEST_PROJECT=Alloy.Api.Tests; [ "$rc" = 0 ] && [ "$(out_val project)" = Alloy.Api.Tests ] && [ "$(out_val assembly)" = Alloy.Api.Tests ]; }
-check "validate: Alloy.Api.Tests -> assembly defaults to the directory name" t
+t() { run_step validate TEST_PROJECT=Example.Api.Tests; [ "$rc" = 0 ] && [ "$(out_val project)" = Example.Api.Tests ] && [ "$(out_val assembly)" = Example.Api.Tests ]; }
+check "validate: Example.Api.Tests -> assembly defaults to the directory name" t
 
-t() { run_step validate TEST_PROJECT=src/Player.Vm.Api.Tests/; [ "$rc" = 0 ] && [ "$(out_val project)" = src/Player.Vm.Api.Tests ] && [ "$(out_val assembly)" = Player.Vm.Api.Tests ]; }
+t() { run_step validate TEST_PROJECT=src/Example.Api.Tests/; [ "$rc" = 0 ] && [ "$(out_val project)" = src/Example.Api.Tests ] && [ "$(out_val assembly)" = Example.Api.Tests ]; }
 check "validate: nested path, trailing slash stripped, assembly is the last segment" t
 
-t() { run_step validate TEST_PROJECT=test/Caster.Api.Tests TEST_ASSEMBLY=Caster.Tests; [ "$rc" = 0 ] && [ "$(out_val assembly)" = Caster.Tests ]; }
+t() { run_step validate TEST_PROJECT=test/Example.Api.Tests TEST_ASSEMBLY=Example.Tests; [ "$rc" = 0 ] && [ "$(out_val assembly)" = Example.Tests ]; }
 check "validate: explicit test-assembly wins" t
 
 for bad in '' '/abs/Tests' '../Tests' 'a/../b' 'a/./b' './Tests' 'a//b' 'A Tests' 'Tests;id' 'Tests$(id)' $'Tests\n::warning::x'; do

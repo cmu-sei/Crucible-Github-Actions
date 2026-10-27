@@ -677,7 +677,7 @@ Provenance and trusted publishing are different things. **Provenance** (`--prove
 
 ### .NET Build and Test
 
-`.github/workflows/dotnet-test.yaml` is a `workflow_call` reusable workflow that builds an API repository and runs its xUnit v3 test project against PostgreSQL (the shared Crucible API test harness, which starts PostgreSQL itself through Testcontainers). It replaces the `build-and-test.yml` that was copied byte for byte into every API repository from the `agent-docs` api-testing template; each repository now keeps only a short caller.
+`.github/workflows/dotnet-test.yaml` is a `workflow_call` reusable workflow that builds an API repository and runs its xUnit v3 test project against PostgreSQL (the shared Crucible API test harness, which starts PostgreSQL itself through Testcontainers).
 
 One job restores, builds and tests, then checks the log for the harness's `[<assembly>] database provider: PostgreSQL` banner (so a harness change cannot silently stop exercising PostgreSQL) and uploads the TRX results as the `test-results` artifact, also when tests fail.
 
@@ -685,16 +685,10 @@ One job restores, builds and tests, then checks the log for the harness's `[<ass
 
 | `global.json` | How the tests run |
 | --- | --- |
-| no `test` section, or `"runner": "VSTest"` | `dotnet test` through the VSTest bridge (today's behavior). |
+| no `test` section (the default), or `"runner": "VSTest"` | `dotnet test` through the VSTest bridge. |
 | `"test": { "runner": "Microsoft.Testing.Platform" }` | The test project runs as a Microsoft.Testing.Platform app (`dotnet run`), built with `UseMicrosoftTestingPlatformRunner=true`. Required by xunit.v3 4 and later on the .NET 10 SDK. |
 
 `dotnet run` is used rather than `dotnet test` for Microsoft.Testing.Platform because `dotnet test` does not forward the test app's console or xUnit diagnostic messages, so the banner would never reach the log. Either way the results land in `<test-project>/TestResults/test-results.trx`.
-
-To move a repository to Microsoft.Testing.Platform (one PR in that repository, no caller change):
-
-1. Add `"test": { "runner": "Microsoft.Testing.Platform" }` to `global.json`.
-2. Update `xunit.v3` and remove `xunit.runner.visualstudio` (only the VSTest bridge uses it).
-3. Local runs: `dotnet test --project <test-project>` replaces `dotnet test <test-project>`, xUnit's own options replace `-- xUnit.…` settings (for example `--xunit-diagnostics on`), and `--collect:"XPlat Code Coverage"` (coverlet.collector, VSTest only) needs a Microsoft.Testing.Platform coverage extension instead.
 
 Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>` with `cancel-in-progress: true`, so a newer push supersedes a run still in flight.
 
@@ -702,7 +696,7 @@ Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>` wit
 
 | Name | Required | Description | Default |
 | --- | --- | --- | --- |
-| `test-project` | ✅ | Test project directory, relative to the repository root (e.g. `Alloy.Api.Tests`, `src/Player.Vm.Api.Tests`). | |
+| `test-project` | ✅ | Test project directory, relative to the repository root (e.g. `Example.Api.Tests`, `src/Example.Api.Tests`). | |
 | `test-assembly` |  | Assembly name the PostgreSQL banner names. | `test-project` directory name |
 | `expect-postgres` |  | Fail unless the log shows the PostgreSQL banner. | `true` |
 | `dotnet-version` |  | SDK to install when the repository has no `global.json` (e.g. `10.0.x`). Leave empty to use `global.json`. | `""` |
@@ -714,12 +708,9 @@ The shared workflow declares no permissions block, so its job inherits the calli
 
 #### Example Usage
 
-`.github/workflows/build-and-test.yml` in Alloy.Api:
-
 ```yaml
 name: Build and Test
 
-# Pull requests validate proposed changes. Pushes to main verify the result after merge.
 on:
   pull_request:
   push:
@@ -733,16 +724,10 @@ jobs:
     permissions:
       contents: read
     with:
-      test-project: Alloy.Api.Tests
+      test-project: Example.Api.Tests
 ```
 
-The status-check context becomes `build-and-test / Build and Test` (it was `Build and Test`); update any ruleset that requires the old name.
-
-| Repository | `test-project` |
-| --- | --- |
-| Alloy.Api, Blueprint.Api, CITE.Api, Gallery.Api, Player.Api, Steamfitter.Api | `<Name>.Api.Tests` (CITE.Api: `Cite.Api.Tests`) |
-| Caster.Api | `test/Caster.Api.Tests` |
-| Vm.Api | `src/Player.Vm.Api.Tests` |
+The status-check context is `<caller job id> / Build and Test`, here `build-and-test / Build and Test`.
 
 ## Continuous integration
 

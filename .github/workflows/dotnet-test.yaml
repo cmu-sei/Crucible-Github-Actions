@@ -6,16 +6,13 @@
 #
 # The test runner comes from the repository's own global.json, so CI and a
 # local `dotnet test` always agree and there is no second copy of the choice:
-#   * no `test.runner` (or "VSTest"): `dotnet test` through the VSTest bridge,
-#     as every API repository runs today.
+#   * no `test.runner` (the default) or "VSTest": `dotnet test` through the
+#     VSTest bridge.
 #   * "Microsoft.Testing.Platform": the test project runs as its own
 #     Microsoft.Testing.Platform app. xunit.v3 4 and later only run this way
 #     on the .NET 10 SDK.
 # Both write the same TRX file to <test-project>/TestResults/test-results.trx
 # and print the harness's database-provider banner to the log.
-#
-# Replaces the build-and-test.yml that was copied byte for byte into each API
-# repository from the agent-docs api-testing template.
 
 name: .NET Build and Test
 
@@ -23,7 +20,7 @@ on:
   workflow_call:
     inputs:
       test-project:
-        description: "Test project directory, relative to the repository root, e.g. Alloy.Api.Tests or src/Player.Vm.Api.Tests"
+        description: "Test project directory, relative to the repository root, e.g. Example.Api.Tests or src/Example.Api.Tests"
         type: string
         required: true
       test-assembly:
