@@ -71,6 +71,7 @@ jobs:
             "nuget|.github/workflows/nuget-release.yaml .github/workflows/nuget-relist.yaml|"
             "npm|.github/workflows/npm-release.yaml|"
             "dotnet-test|.github/workflows/dotnet-test.yaml|"
+            "npm-test|.github/workflows/npm-test.yaml|"
           )
 
           include='[]'

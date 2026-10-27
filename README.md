@@ -16,6 +16,7 @@ in this repository to keep shared automation consistent across applications.
   - [NuGet Relist](#nuget-relist)
   - [npm Release](#npm-release)
   - [.NET Build and Test](#net-build-and-test)
+  - [npm Build and Test](#npm-build-and-test)
 - [Continuous integration](#continuous-integration)
 - [Dependabot](#dependabot)
 - [Releasing](#releasing)
@@ -729,9 +730,58 @@ jobs:
 
 The status-check context is `<caller job id> / Build and Test`, here `build-and-test / Build and Test`.
 
+### npm Build and Test
+
+`.github/workflows/npm-test.yaml` is a `workflow_call` reusable workflow that installs, tests and optionally lints and builds a UI repository (Angular apps built with npm). One job sets up Node with the npm cache, runs the install command, the lint command (if set), the test command, and the build command (if set), then uploads the coverage report as the `coverage` artifact, also when tests fail.
+
+Commands are run with `bash -euo pipefail -c`, so a failing command fails the job. Coverage thresholds belong to the test runner (for example `coverageThresholds` in `angular.json`); the workflow only uploads the report.
+
+Runs share the concurrency group `npm-test-<repository>-<workflow>-<ref>` with `cancel-in-progress: true`, so a newer push supersedes a run still in flight.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `node-version` |  | Node.js version for `actions/setup-node` (`24`, `24.11`, `24.11.1`). Match the node image in the repository's Dockerfile. | `24` |
+| `install-command` |  | Installs dependencies. | `npm ci` |
+| `test-command` |  | Runs the tests once (no watch mode). | `npm run test:coverage` |
+| `lint-command` |  | Lints before the tests, e.g. `npm run lint`. Empty skips the step. | `""` |
+| `build-command` |  | Builds after the tests, e.g. `npx ng build --configuration production`. Empty skips the step. | `""` |
+| `coverage-path` |  | Coverage directory uploaded as the `coverage` artifact. Empty skips the upload. | `coverage` |
+| `timeout-minutes` |  | Job timeout. | `20` |
+
+#### Required Permissions
+
+The shared workflow declares no permissions block, so its job inherits the calling job's grant. The calling job grants `contents: read`.
+
+#### Example Usage
+
+```yaml
+name: Build Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  build-test:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/npm-test.yaml@npm-test-v1
+    permissions:
+      contents: read
+    with:
+      node-version: "24"
+      build-command: npx ng build --configuration production
+```
+
+The status-check context is `<caller job id> / Build and Test`, here `build-test / Build and Test`.
+
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, and the .NET build-and-test workflow's input validation and test-runner detection), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, the .NET build-and-test workflow's input validation and test-runner detection, and the npm build-and-test workflow's input validation), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
@@ -766,6 +816,7 @@ Each action family in this repository is versioned independently. Releases are t
 | `nuget` | `.github/workflows/nuget-release.yaml`, `nuget-relist.yaml` | `nuget-v1.0.0` |
 | `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
 | `dotnet-test` | `.github/workflows/dotnet-test.yaml` | `dotnet-test-v1.0.0` |
+| `npm-test` | `.github/workflows/npm-test.yaml` | `npm-test-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 

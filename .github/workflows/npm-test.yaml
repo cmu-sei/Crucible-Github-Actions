@@ -1,0 +1,123 @@
+# Reusable build-and-test workflow for Crucible UI repositories (Angular apps
+# built with npm).
+#
+# Pipeline shape (single job): validate -> checkout -> setup Node (npm cache)
+# -> install -> (lint) -> test -> (build) -> upload coverage.
+#
+# Lint and build are off unless the caller passes a command, so a repository
+# can turn each one on once it passes. The coverage report is uploaded as the
+# `coverage` artifact, also when tests fail; coverage thresholds, if any, are
+# the test runner's own (for example angular.json `coverageThresholds`).
+
+name: npm Build and Test
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js major (or major.minor[.patch]) for actions/setup-node. Match the node image in the repository's Dockerfile."
+        type: string
+        default: "24"
+      install-command:
+        description: "Shell command that installs dependencies."
+        type: string
+        default: npm ci
+      test-command:
+        description: "Shell command that runs the tests once (no watch mode)."
+        type: string
+        default: npm run test:coverage
+      lint-command:
+        description: "Shell command that lints, run before the tests (e.g. npm run lint). Empty = skip."
+        type: string
+        default: ""
+      build-command:
+        description: "Shell command that builds the app, run after the tests (e.g. npx ng build --configuration production). Empty = skip."
+        type: string
+        default: ""
+      coverage-path:
+        description: "Coverage report directory to upload as the `coverage` artifact. Empty = skip the upload."
+        type: string
+        default: coverage
+      timeout-minutes:
+        description: "Job timeout in minutes."
+        type: number
+        default: 20
+
+# No permissions block here on purpose: a called workflow that declares more
+# than its caller grants fails at startup, so jobs inherit the caller's grant
+# instead. Callers grant `contents: read`.
+
+# A newer run for the same pull request or branch supersedes one still in flight.
+concurrency:
+  group: npm-test-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          NODE_VERSION: ${{ inputs.node-version }}
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+          COVERAGE_PATH: ${{ inputs.coverage-path }}
+        # Error messages never echo the raw input (a newline in it could
+        # inject workflow commands).
+        run: |
+          set -euo pipefail
+          [[ "$NODE_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "::error::node-version must be a Node.js version such as 24 or 24.11"; exit 1; }
+          [[ -n "$INSTALL_COMMAND" ]] || { echo "::error::install-command must not be empty"; exit 1; }
+          [[ -n "$TEST_COMMAND" ]] || { echo "::error::test-command must not be empty"; exit 1; }
+          coverage="${COVERAGE_PATH%/}"
+          if [[ -n "$coverage" ]]; then
+            [[ "$coverage" =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || { echo "::error::coverage-path must be a relative directory of letters, digits, '.', '_', '-' and '/'"; exit 1; }
+            [[ "/$coverage/" != */../* && "/$coverage/" != */./* && "$coverage" != *//* ]] || { echo "::error::coverage-path must not contain '.', '..' or empty path segments"; exit 1; }
+          fi
+          echo "coverage=$coverage" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: bash -euo pipefail -c "$INSTALL_COMMAND"
+
+      - name: Lint
+        if: inputs.lint-command != ''
+        env:
+          LINT_COMMAND: ${{ inputs.lint-command }}
+        run: bash -euo pipefail -c "$LINT_COMMAND"
+
+      - name: Test
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: bash -euo pipefail -c "$TEST_COMMAND"
+
+      - name: Build
+        if: inputs.build-command != ''
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$BUILD_COMMAND"
+
+      # Unconditional once tests have run, so a failing run still shows which
+      # lines are uncovered. Nothing here gates on the figure.
+      - name: Upload coverage
+        if: always() && steps.validate.outputs.coverage != '' && steps.validate.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: ${{ steps.validate.outputs.coverage }}
+          if-no-files-found: warn
