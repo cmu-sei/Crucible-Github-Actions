@@ -15,6 +15,7 @@ in this repository to keep shared automation consistent across applications.
   - [NuGet Release](#nuget-release)
   - [NuGet Relist](#nuget-relist)
   - [npm Release](#npm-release)
+  - [.NET Build and Test](#net-build-and-test)
 - [Continuous integration](#continuous-integration)
 - [Dependabot](#dependabot)
 - [Releasing](#releasing)
@@ -674,9 +675,78 @@ jobs:
 
 Provenance and trusted publishing are different things. **Provenance** (`--provenance`) attaches a signed attestation linking the published package to the workflow run that built it; it uses the job's OIDC token (`id-token: write`) but the publish itself is still authenticated with `NPM_TOKEN`. **Trusted publishing** replaces `NPM_TOKEN` with OIDC authentication against a trusted-publisher configuration on npmjs.com. Callers use `auth-mode: api-key` today; switching to `auth-mode: trusted` (and dropping the `NPM_TOKEN` secret) is a later phase, once each package has a trusted publisher configured.
 
+### .NET Build and Test
+
+`.github/workflows/dotnet-test.yaml` is a `workflow_call` reusable workflow that builds an API repository and runs its xUnit v3 test project against PostgreSQL (the shared Crucible API test harness, which starts PostgreSQL itself through Testcontainers). It replaces the `build-and-test.yml` that was copied byte for byte into every API repository from the `agent-docs` api-testing template; each repository now keeps only a short caller.
+
+One job restores, builds and tests, then checks the log for the harness's `[<assembly>] database provider: PostgreSQL` banner (so a harness change cannot silently stop exercising PostgreSQL) and uploads the TRX results as the `test-results` artifact, also when tests fail.
+
+**Test runner.** The workflow reads `test.runner` from the repository's `global.json`, the same setting `dotnet test` reads on the .NET 10 SDK, so CI and local runs always agree:
+
+| `global.json` | How the tests run |
+| --- | --- |
+| no `test` section, or `"runner": "VSTest"` | `dotnet test` through the VSTest bridge (today's behavior). |
+| `"test": { "runner": "Microsoft.Testing.Platform" }` | The test project runs as a Microsoft.Testing.Platform app (`dotnet run`), built with `UseMicrosoftTestingPlatformRunner=true`. Required by xunit.v3 4 and later on the .NET 10 SDK. |
+
+`dotnet run` is used rather than `dotnet test` for Microsoft.Testing.Platform because `dotnet test` does not forward the test app's console or xUnit diagnostic messages, so the banner would never reach the log. Either way the results land in `<test-project>/TestResults/test-results.trx`.
+
+To move a repository to Microsoft.Testing.Platform (one PR in that repository, no caller change):
+
+1. Add `"test": { "runner": "Microsoft.Testing.Platform" }` to `global.json`.
+2. Update `xunit.v3` and remove `xunit.runner.visualstudio` (only the VSTest bridge uses it).
+3. Local runs: `dotnet test --project <test-project>` replaces `dotnet test <test-project>`, xUnit's own options replace `-- xUnit.…` settings (for example `--xunit-diagnostics on`), and `--collect:"XPlat Code Coverage"` (coverlet.collector, VSTest only) needs a Microsoft.Testing.Platform coverage extension instead.
+
+Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>` with `cancel-in-progress: true`, so a newer push supersedes a run still in flight.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `test-project` | ✅ | Test project directory, relative to the repository root (e.g. `Alloy.Api.Tests`, `src/Player.Vm.Api.Tests`). | |
+| `test-assembly` |  | Assembly name the PostgreSQL banner names. | `test-project` directory name |
+| `expect-postgres` |  | Fail unless the log shows the PostgreSQL banner. | `true` |
+| `dotnet-version` |  | SDK to install when the repository has no `global.json` (e.g. `10.0.x`). Leave empty to use `global.json`. | `""` |
+| `timeout-minutes` |  | Job timeout. | `30` |
+
+#### Required Permissions
+
+The shared workflow declares no permissions block, so its job inherits the calling job's grant. The calling job grants `contents: read`.
+
+#### Example Usage
+
+`.github/workflows/build-and-test.yml` in Alloy.Api:
+
+```yaml
+name: Build and Test
+
+# Pull requests validate proposed changes. Pushes to main verify the result after merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  build-and-test:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/dotnet-test.yaml@dotnet-test-v1
+    permissions:
+      contents: read
+    with:
+      test-project: Alloy.Api.Tests
+```
+
+The status-check context becomes `build-and-test / Build and Test` (it was `Build and Test`); update any ruleset that requires the old name.
+
+| Repository | `test-project` |
+| --- | --- |
+| Alloy.Api, Blueprint.Api, CITE.Api, Gallery.Api, Player.Api, Steamfitter.Api | `<Name>.Api.Tests` (CITE.Api: `Cite.Api.Tests`) |
+| Caster.Api | `test/Caster.Api.Tests` |
+| Vm.Api | `src/Player.Vm.Api.Tests` |
+
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job and the NuGet and npm workflows' input validation), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, and the .NET build-and-test workflow's input validation and test-runner detection), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
@@ -710,6 +780,7 @@ Each action family in this repository is versioned independently. Releases are t
 | `codeql` | `.github/workflows/codeql.yaml` | `codeql-v1.0.0` |
 | `nuget` | `.github/workflows/nuget-release.yaml`, `nuget-relist.yaml` | `nuget-v1.0.0` |
 | `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
+| `dotnet-test` | `.github/workflows/dotnet-test.yaml` | `dotnet-test-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 

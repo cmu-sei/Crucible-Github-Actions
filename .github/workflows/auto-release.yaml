@@ -70,6 +70,7 @@ jobs:
             "codeql|.github/workflows/codeql.yaml|"
             "nuget|.github/workflows/nuget-release.yaml .github/workflows/nuget-relist.yaml|"
             "npm|.github/workflows/npm-release.yaml|"
+            "dotnet-test|.github/workflows/dotnet-test.yaml|"
           )
 
           include='[]'
