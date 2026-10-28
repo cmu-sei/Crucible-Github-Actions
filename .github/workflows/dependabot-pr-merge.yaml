@@ -1,5 +1,5 @@
-# This repository's own Dependabot auto-merge: calls the shared workflow in this
-# commit with the crucible-ci App token, so a merge triggers Auto release on push.
+# This repository's own Dependabot auto-merge: calls the shared workflow
+# with the crucible-ci App token, so a merge triggers Auto release on push.
 
 name: Dependabot PR merge
 
