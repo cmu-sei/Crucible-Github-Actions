@@ -1,51 +1,82 @@
-# Approve and queue auto-merge for Dependabot patch updates.
+# Reusable workflow: approve and queue auto-merge for Dependabot patch updates.
 #
-# Only acts on pull requests authored by `dependabot[bot]` in
-# cmu-sei/Crucible-Github-Actions (forks and other authors are skipped).
-# Patch updates, as classified by Dependabot's own update-type
-# metadata, are approved and queued for auto-merge (squash); minor and major
-# updates are left for a human to review.
+# Only acts on pull requests authored by `dependabot[bot]` in cmu-sei
+# repositories (forks and other authors are skipped). Patch updates, as
+# classified by Dependabot's own update-type metadata, are approved and queued
+# for auto-merge; minor and major updates are left for a human to review. For a
+# grouped pull request the update type is the group's largest bump, so a group
+# that contains any minor update is left for review.
 #
-# The approval and merge are performed with a token minted from the org's
-# `crucible-ci` GitHub App rather than GITHUB_TOKEN. Merges made with
-# GITHUB_TOKEN do not trigger `push` workflows; merges made under the App do,
-# so the resulting push to `main` runs workflows such as Auto release. The App
-# must be installed on this repository, and CRUCIBLE_HELM_UPDATE_CLIENT_ID /
-# CRUCIBLE_HELM_UPDATE_PRIVATE_KEY must be available as **Dependabot** secrets
-# for this repository: `pull_request` runs for Dependabot-authored PRs receive
-# Dependabot secrets, not Actions secrets. GITHUB_TOKEN is only used to read.
-#
-# This workflow never checks out code, so nothing from the pull request is
+# The workflow never checks out code, so nothing from the pull request is
 # executed; it only reads Dependabot's metadata and calls the GitHub API.
 #
+# Token (`token` input):
+#   * github-token (default): the caller's GITHUB_TOKEN. The calling job grants
+#     `contents: write` and `pull-requests: write`, and the repository allows
+#     GitHub Actions to approve pull requests. Merges made with GITHUB_TOKEN do
+#     not trigger `push` workflows.
+#   * app: a token minted from the org's `crucible-ci` GitHub App, narrowed to
+#     contents and pull requests. Merges made under the App do trigger `push`
+#     workflows (this repository uses it so Auto release runs). Needs the App
+#     installed on the repository and CRUCIBLE_HELM_UPDATE_CLIENT_ID /
+#     CRUCIBLE_HELM_UPDATE_PRIVATE_KEY passed in; Dependabot-triggered runs
+#     receive Dependabot secrets, not Actions secrets.
+#
 # Depends on these repository settings, configured in this order:
-# 1. Required status checks on `main` (actionlint, codeql-plan-tests,
-#    update-helm-chart-tests, codeql / Plan languages,
-#    codeql / Analyze (python), codeql / Analyze (actions)), so auto-merge
-#    waits for CI to pass.
+# 1. Required status checks on `main`, so auto-merge waits for CI to pass.
 # 2. "Allow auto-merge" enabled.
 # If auto-merge is disabled the merge step fails on purpose so the
-# misconfiguration is visible. If auto-merge is enabled but no required
-# checks are configured, the App's approval satisfies the review rule and the
-# merge can proceed immediately, before CI finishes; hence the order above.
+# misconfiguration is visible. If auto-merge is enabled but no required checks
+# are configured, the approval satisfies the review rule and the merge can
+# proceed immediately, before CI finishes; hence the order above.
 
 name: Dependabot auto-merge
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
+    inputs:
+      token:
+        description: "github-token (the caller's GITHUB_TOKEN; grant contents: write and pull-requests: write) or app (crucible-ci App token; pass the App secrets)."
+        type: string
+        default: github-token
+      merge-method:
+        description: "squash, merge or rebase."
+        type: string
+        default: squash
+    secrets:
+      CRUCIBLE_HELM_UPDATE_CLIENT_ID:
+        description: "crucible-ci App client ID (token: app)."
+        required: false
+      CRUCIBLE_HELM_UPDATE_PRIVATE_KEY:
+        description: "crucible-ci App private key (token: app)."
+        required: false
 
-permissions: {}
+# No permissions block here on purpose: a called workflow that declares more
+# than its caller grants fails at startup, so the job inherits the caller's
+# grant instead. Callers grant `contents: write` and `pull-requests: write`
+# with token github-token, or read access with token app.
 
 jobs:
   automerge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'cmu-sei/Crucible-Github-Actions'
-    permissions:
-      contents: read
-      pull-requests: read
+    name: Auto-merge
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository_owner == 'cmu-sei'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          TOKEN: ${{ inputs.token }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
+        # Error messages never echo the raw input (a newline in it could
+        # inject workflow commands).
+        run: |
+          set -euo pipefail
+          [[ "$TOKEN" =~ ^(github-token|app)$ ]] || { echo "::error::token must be github-token or app"; exit 1; }
+          [[ "$MERGE_METHOD" =~ ^(squash|merge|rebase)$ ]] || { echo "::error::merge-method must be squash, merge or rebase"; exit 1; }
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "merge_method=$MERGE_METHOD" >> "$GITHUB_OUTPUT"
+
       - name: Fetch Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
@@ -57,7 +88,7 @@ jobs:
         run: echo "::notice::Leaving $UPDATE_TYPE update for human review."
 
       - name: Check App credentials
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' && steps.validate.outputs.token == 'app'
         env:
           CLIENT_ID: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
           PRIVATE_KEY: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
@@ -65,12 +96,12 @@ jobs:
           if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
             exit 0
           fi
-          echo "::error::App credentials not available — ensure CRUCIBLE_HELM_UPDATE_CLIENT_ID/PRIVATE_KEY are Dependabot secrets scoped to this repository"
+          echo "::error::App credentials not available — pass CRUCIBLE_HELM_UPDATE_CLIENT_ID/PRIVATE_KEY (Dependabot secrets scoped to this repository)"
           exit 1
 
       - name: Mint crucible-ci App token
         id: app-token
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch' && steps.validate.outputs.token == 'app'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
@@ -84,11 +115,12 @@ jobs:
       - name: Approve and enable auto-merge
         if: steps.meta.outputs.update-type == 'version-update:semver-patch'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
           DEPS: ${{ steps.meta.outputs.dependency-names }}
+          MERGE_METHOD: ${{ steps.validate.outputs.merge_method }}
         run: |
           set -euo pipefail
           gh pr review --approve "$PR_URL" --body "Auto-approved: Dependabot $UPDATE_TYPE update ($DEPS)."
-          gh pr merge --auto --squash "$PR_URL"
+          gh pr merge --auto "--$MERGE_METHOD" "$PR_URL"

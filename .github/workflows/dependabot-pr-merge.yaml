@@ -1,0 +1,23 @@
+# This repository's own Dependabot auto-merge: calls the shared workflow
+# with the crucible-ci App token, so a merge triggers Auto release on push.
+
+name: Dependabot PR merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'cmu-sei/Crucible-Github-Actions'
+    uses: ./.github/workflows/dependabot-auto-merge.yaml
+    permissions:
+      contents: read        # the App token does the writes
+      pull-requests: read
+    with:
+      token: app
+    secrets:
+      CRUCIBLE_HELM_UPDATE_CLIENT_ID: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
+      CRUCIBLE_HELM_UPDATE_PRIVATE_KEY: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
