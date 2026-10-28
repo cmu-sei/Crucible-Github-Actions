@@ -31,6 +31,7 @@ on:
           - nuget
           - npm
           - dotnet-test
+          - npm-test
       version:
         description: Release version (X.Y.Z)
         required: true
@@ -77,7 +78,7 @@ jobs:
 
           # workflow_call inputs have no choice type, so re-check the family.
           case "$FAMILY" in
-            docker|header|update-helm-chart|codeql|nuget|npm|dotnet-test) ;;
+            docker|header|update-helm-chart|codeql|nuget|npm|dotnet-test|npm-test) ;;
             *)
               echo "::error::Unknown family '$FAMILY'"
               exit 1
