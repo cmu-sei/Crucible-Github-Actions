@@ -17,6 +17,7 @@ in this repository to keep shared automation consistent across applications.
   - [npm Release](#npm-release)
   - [.NET Build and Test](#net-build-and-test)
   - [npm Build and Test](#npm-build-and-test)
+  - [Dependabot Auto-merge](#dependabot-auto-merge)
 - [Continuous integration](#continuous-integration)
 - [Dependabot](#dependabot)
 - [Releasing](#releasing)
@@ -779,9 +780,67 @@ jobs:
 
 The status-check context is `<caller job id> / Build and Test`, here `build-test / Build and Test`.
 
+### Dependabot Auto-merge
+
+`.github/workflows/dependabot-auto-merge.yaml` is a `workflow_call` reusable workflow that approves and queues auto-merge for Dependabot **patch** updates. Minor and major updates are left for a person. It acts only on pull requests opened by `dependabot[bot]` in `cmu-sei` repositories, reads the update type from Dependabot's own metadata (`dependabot/fetch-metadata`), and never checks out code. For a grouped pull request the update type is the group's largest bump, so a group that contains any minor update is left for review.
+
+The approval and merge use one of two tokens (`token` input):
+
+| `token` | Token | Caller grants | Notes |
+| --- | --- | --- | --- |
+| `github-token` (default) | the caller's `GITHUB_TOKEN` | `contents: write`, `pull-requests: write` | The repository must allow GitHub Actions to create and approve pull requests. Merges made with `GITHUB_TOKEN` do not trigger `push` workflows. |
+| `app` | minted from the org's `crucible-ci` GitHub App, narrowed to contents and pull requests | `contents: read`, `pull-requests: read` | Merges trigger `push` workflows. Needs the App installed and `CRUCIBLE_HELM_UPDATE_CLIENT_ID` / `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` passed as secrets; runs for Dependabot pull requests receive **Dependabot** secrets, not Actions secrets. |
+
+Repository settings, configured in this order:
+
+1. Required status checks on `main` (the repository's build/test check and its `codeql / Analyze (<lang>)` checks), so auto-merge waits for CI.
+2. "Allow auto-merge" enabled.
+
+Configure the required status checks **before** enabling auto-merge: otherwise the approval satisfies the one-review rule and a patch update can merge before CI finishes. With auto-merge disabled, the merge step fails on purpose so the misconfiguration is visible.
+
+This workflow approves and merges with write access in every calling repository, and a floating tag carries a change to all of them at once. Treat a change to its behaviour as a minor release (`[release:minor]`), and keep `tests/dependabot-auto-merge.test.sh` covering the patch-only and author gates.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `token` |  | `github-token` or `app` (see above). | `github-token` |
+| `merge-method` |  | `squash`, `merge` or `rebase`. | `squash` |
+
+#### Secrets
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `CRUCIBLE_HELM_UPDATE_CLIENT_ID` | With `token: app` | crucible-ci App client ID. |
+| `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` | With `token: app` | crucible-ci App private key. |
+
+#### Example Usage
+
+`.github/workflows/dependabot-pr-merge.yml`:
+
+```yaml
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/dependabot-auto-merge.yaml@dependabot-auto-merge-v1
+    permissions:
+      contents: write
+      pull-requests: write
+```
+
+The job-level `if` keeps the workflow from starting a runner for other pull requests.
+
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, the .NET build-and-test workflow's input validation and test-runner detection, and the npm build-and-test workflow's input validation), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, the .NET build-and-test workflow's input validation and test-runner detection, the npm build-and-test workflow's input validation, and the Dependabot auto-merge workflow's input validation and gates), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
@@ -789,17 +848,11 @@ The `main` ruleset should list these required status-check contexts, exactly as 
 
 `.github/dependabot.yml` checks the GitHub Actions used by the workflows and composite actions weekly and groups all updates into one pull request.
 
-`.github/workflows/dependabot-auto-merge.yaml` approves and queues auto-merge (squash) for Dependabot patch updates; minor and major updates are left for manual review. It never checks out code. It depends on these repository settings, configured in this order:
+`.github/workflows/dependabot-pr-merge.yaml` runs [Dependabot Auto-merge](#dependabot-auto-merge) for this repository's own Dependabot pull requests, calling the copy in the same commit (`./.github/workflows/dependabot-auto-merge.yaml`) with `token: app`. This repository uses the App token because a merge has to trigger **Auto release** on `push`, which a `GITHUB_TOKEN` merge would not. This requires:
 
-1. Required status checks on `main` (the contexts listed in [Continuous integration](#continuous-integration)), so auto-merge waits for CI.
-2. "Allow auto-merge" enabled.
-
-Configure the required status checks **before** enabling auto-merge: otherwise the App's approval satisfies the one-review rule and an auto-merge PR can merge before CI finishes.
-
-The approval and merge are performed with a token minted from the org's `crucible-ci` GitHub App, not `GITHUB_TOKEN`. Merges made with `GITHUB_TOKEN` do not trigger `push` workflows; merges made under the App do, so the resulting push to `main` triggers workflows such as Auto release. This requires:
-
-- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write); the minted token is narrowed to only those two permissions.
-- `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). `pull_request` runs for PRs authored by `dependabot[bot]` receive Dependabot secrets, not Actions secrets. If they are missing, the workflow fails with an explicit error before minting a token.
+- The `crucible-ci` App installed on this repository (Contents and Pull requests read/write).
+- `CRUCIBLE_HELM_UPDATE_CLIENT_ID` and `CRUCIBLE_HELM_UPDATE_PRIVATE_KEY` available as **Dependabot** secrets for this repository (Settings → Secrets and variables → Dependabot, or org-level Dependabot secrets scoped to this repository). If they are missing, the workflow fails with an explicit error before minting a token.
+- The required status checks listed in [Continuous integration](#continuous-integration), configured before "Allow auto-merge".
 
 Auto-merged bumps are released by **Auto release** on the resulting push to `main`, which cuts a patch release for each affected family (see [Releasing](#releasing)).
 
@@ -817,6 +870,7 @@ Each action family in this repository is versioned independently. Releases are t
 | `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
 | `dotnet-test` | `.github/workflows/dotnet-test.yaml` | `dotnet-test-v1.0.0` |
 | `npm-test` | `.github/workflows/npm-test.yaml` | `npm-test-v1.0.0` |
+| `dependabot-auto-merge` | `.github/workflows/dependabot-auto-merge.yaml` | `dependabot-auto-merge-v1.0.0` |
 
 Pre-existing `update-helm-chart` release tags used two segments (for example `update-helm-chart-v3.1`); new releases use three (`X.Y.Z`).
 
