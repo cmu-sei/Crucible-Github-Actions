@@ -186,7 +186,7 @@ Matched files are logged as `skipping (ignored): <path>` and left untouched. Whe
 
 ### NuGet Publish
 
-`actions/nuget-publish` publishes a package packed by [NuGet Release](#nuget-release) with `auth-mode: trusted` to nuget.org using NuGet trusted publishing, so no long-lived push key is stored. It downloads the `nupkg-<PackageId>-<version>` run artifact, exchanges the job's OIDC token for a short-lived push key with `NuGet/login`, pushes, optionally unlists, and creates the GitHub release/tag, in the same order as NuGet Release's api-key path.
+`actions/nuget-publish` publishes a package packed by [NuGet Release](#nuget-release) with `auth-mode: trusted` to nuget.org using NuGet trusted publishing, so no long-lived push key is stored. It downloads the `nupkg-<PackageId>-<version>` run artifact, exchanges the job's OIDC token for a short-lived API key with `NuGet/login`, pushes, optionally unlists, and creates the GitHub release/tag, in the same order as NuGet Release's api-key path.
 
 It is a composite action and not a step of the reusable workflow because nuget.org only accepts a token whose `job_workflow_ref` claim is a workflow file **in the publishing repository**. A job of a reusable workflow carries the reusable workflow's claim (`cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@...`), which nuget.org rejects with HTTP 401. A composite action runs inside the calling job, so the claim names the caller's own workflow file.
 
@@ -198,6 +198,7 @@ On nuget.org, under **Trusted Publishing**, add a policy for the caller:
 - **Repository:** the API repository, e.g. `Alloy.Api`
 - **Workflow File:** the caller's file name only, e.g. `build-client.yml`
 - **Environment:** leave empty unless the publish job sets `environment:`
+- **Scopes:** Push (new packages, or new versions of existing ones), plus **Unlist** when the caller sets `unlist: true`. The short-lived key gets exactly the policy's scopes; a policy with no scopes selected gets all of them.
 
 `nuget-user` is the nuget.org profile name of the user who **created** that policy, not the owning organization and not an email address. Store it as an Actions variable (`vars.NUGET_USER`) or secret (`secrets.NUGET_USER`); both can be passed to an action's inputs.
 
@@ -209,8 +210,7 @@ On nuget.org, under **Trusted Publishing**, add a policy for the caller:
 | `version` | ✅ | Package version (NuGet Release's `version` output). | |
 | `nuget-user` | ✅ | nuget.org profile name of the policy creator. | |
 | `artifact-name` |  | Run artifact holding the package. | `nupkg-<package-id>-<version>` |
-| `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention). | `false` |
-| `unlist-api-key` |  | nuget.org key with unlist scope, required with `unlist: true` (`NUGET_APIKEY_UNLIST`). The trusted-publishing key is used only for the push. | `""` |
+| `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention), with the same short-lived key. The policy must include the **Unlist** scope. | `false` |
 | `github-release` |  | `release` = tag + GitHub release with the `.nupkg` attached; `tag` = tag only; `none` = skip. | `release` |
 | `release-tag` |  | Tag name. | `<package-id>.<version>` |
 | `github-token` |  | Token that creates the tag/release. | `${{ github.token }}` |
@@ -261,7 +261,6 @@ jobs:
           version: ${{ needs.pack.outputs.version }}
           nuget-user: ${{ vars.NUGET_USER }}
           unlist: true
-          unlist-api-key: ${{ secrets.NUGET_APIKEY_UNLIST }}
 ```
 
 The action belongs to the `nuget` release family, so pin it with the same `nuget-v1` tag as NuGet Release.
@@ -593,7 +592,7 @@ To validate a new caller without credentials, add `dry-run: true` under `with:` 
 
 nuget.org trusted publishing cannot run inside this reusable workflow: nuget.org requires the OIDC token's `job_workflow_ref` to be a workflow file in the publishing repository, and this workflow's job always carries its own (`cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@...`). With `auth-mode: trusted` the workflow therefore stops after the artifact upload, and the caller publishes from a job of its own with the [NuGet Publish](#nuget-publish) action; see its example for the complete caller and the nuget.org policy settings.
 
-Unlisting still uses `NUGET_APIKEY_UNLIST`, passed to the action as `unlist-api-key`; the short-lived trusted-publishing key is used only for the push.
+The short-lived key carries the scopes selected on the policy, so with `unlist: true` the action unlists with it too and no `NUGET_APIKEY_UNLIST` is needed. [NuGet Relist](#nuget-relist) is a reusable workflow and hits the same `job_workflow_ref` restriction, so it still uses `NUGET_APIKEY_UNLIST`.
 
 ### NuGet Relist
 

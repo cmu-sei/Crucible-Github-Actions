@@ -126,7 +126,7 @@ check "relist: error message does not echo the raw input" t
 
 # ---- actions/nuget-publish: Validate inputs ----
 # The runner always sets every env: key (empty when the input is unset).
-pub_env=(PACKAGE_ID=Alloy.Api.Client VERSION=1.2.3 NUGET_USER=crucible UNLIST=false UNLIST_API_KEY= GITHUB_RELEASE=release RELEASE_TAG= ARTIFACT_NAME=)
+pub_env=(PACKAGE_ID=Alloy.Api.Client VERSION=1.2.3 NUGET_USER=crucible UNLIST=false GITHUB_RELEASE=release RELEASE_TAG= ARTIFACT_NAME=)
 
 t() { run_step publish "${pub_env[@]}"
   [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ] && [ "$(out_val tag)" = Alloy.Api.Client.1.2.3 ] \
@@ -140,11 +140,8 @@ check "publish: leading v stripped; release-tag and artifact-name overrides" t
 t() { run_step publish "${pub_env[@]}" NUGET_USER=; [ "$rc" = 1 ] && grep -q "nuget-user is empty" "$ERR" && [ ! -s "$OUT" ]; }
 check "publish: empty nuget-user rejected (unset vars.NUGET_USER)" t
 
-t() { run_step publish "${pub_env[@]}" UNLIST=true; [ "$rc" = 1 ] && grep -q "requires unlist-api-key" "$ERR"; }
-check "publish: unlist without unlist-api-key rejected" t
-
-t() { run_step publish "${pub_env[@]}" UNLIST=true UNLIST_API_KEY=k; [ "$rc" = 0 ]; }
-check "publish: unlist with unlist-api-key accepted" t
+t() { run_step publish "${pub_env[@]}" UNLIST=true; [ "$rc" = 0 ]; }
+check "publish: unlist: true accepted (unlisted with the trusted-publishing key)" t
 
 t() { run_step publish "${pub_env[@]}" UNLIST=yes; [ "$rc" = 1 ] && grep -q "unlist must be" "$ERR"; }
 check "publish: invalid unlist rejected" t
