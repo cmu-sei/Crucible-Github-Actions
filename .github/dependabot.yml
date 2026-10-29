@@ -4,6 +4,7 @@ updates:
     directories:
       - "/.github/workflows"
       - "/actions/header"
+      - "/actions/nuget-publish"
       - "/actions/update-helm-chart"
     schedule:
       interval: "weekly"
