@@ -16,11 +16,8 @@ inputs:
     description: "Run artifact holding the package. Defaults to nupkg-<package-id>-<version>, the name nuget-release.yaml uploads."
     default: ""
   unlist:
-    description: "Unlist the version on nuget.org right after pushing (API client convention)"
+    description: "Unlist the version on nuget.org right after pushing (API client convention). The trusted-publishing policy must include the Unlist scope."
     default: "false"
-  unlist-api-key:
-    description: "nuget.org key with unlist scope (unlist: true). The trusted-publishing key is push-only."
-    default: ""
   github-release:
     description: "release = tag + GitHub release with the .nupkg attached; tag = tag only; none = skip"
     default: release
@@ -47,7 +44,6 @@ runs:
         VERSION: ${{ inputs.version }}
         NUGET_USER: ${{ inputs.nuget-user }}
         UNLIST: ${{ inputs.unlist }}
-        UNLIST_API_KEY: ${{ inputs.unlist-api-key }}
         GITHUB_RELEASE: ${{ inputs.github-release }}
         RELEASE_TAG: ${{ inputs.release-tag }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
@@ -61,7 +57,6 @@ runs:
         [[ "$VERSION" =~ $semver ]] || { echo "::error::version input is not a valid SemVer version without build metadata (expected like 1.2.3 or 1.2.3-rc.1)"; exit 1; }
         [ -n "$NUGET_USER" ] || { echo "::error::nuget-user is empty: pass the nuget.org profile name that created the trusted-publishing policy (e.g. from vars.NUGET_USER)"; exit 1; }
         [[ "$UNLIST" =~ ^(true|false)$ ]] || { echo "::error::unlist must be true or false"; exit 1; }
-        [ "$UNLIST" = false ] || [ -n "$UNLIST_API_KEY" ] || { echo "::error::unlist: true requires unlist-api-key (the NUGET_APIKEY_UNLIST secret)"; exit 1; }
         [[ "$GITHUB_RELEASE" =~ ^(release|tag|none)$ ]] || { echo "::error::github-release must be release, tag or none"; exit 1; }
         {
           echo "version=$VERSION"
@@ -98,9 +93,11 @@ runs:
       if: inputs.unlist == 'true'
       shell: bash
       env:
-        NUGET_API_KEY: ${{ inputs.unlist-api-key }}
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         PACKAGE_ID: ${{ inputs.package-id }}
         VERSION: ${{ steps.validate.outputs.version }}
+      # The short-lived key carries the policy's scopes, so this needs the
+      # policy's Unlist scope (Push alone answers 403).
       run: |
         set -euo pipefail
         dotnet nuget delete "$PACKAGE_ID" "$VERSION" --non-interactive \
