@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests the input validation of the shared NuGet workflows (and the Pack
 # step's MSBuild escaping of `description`) by extracting the
-# `run:` body of the `validate` step from .github/workflows/nuget-release.yaml
-# and .github/workflows/nuget-relist.yaml and running it locally against a
-# temporary GITHUB_OUTPUT file.
+# `run:` body of the `validate` step from .github/workflows/nuget-release.yaml,
+# .github/workflows/nuget-relist.yaml and actions/nuget-publish/action.yaml and
+# running it locally against a temporary GITHUB_OUTPUT file.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +24,23 @@ extract_step() {
   ' "$1" | sed -e 's/^          //'
 }
 
+# Same for a composite action, whose steps sit two columns further left.
+extract_action_step() {
+  awk -v want="$2" '
+    /^    - / { in_step = 0 }
+    $0 ~ "^      id: " want "$" { in_step = 1; next }
+    in_step && /^      run: \|$/ { in_run = 1; next }
+    in_run {
+      if ($0 ~ /^    - / || ($0 !~ /^[[:space:]]*$/ && $0 !~ /^        /)) { exit }
+      print
+    }
+  ' "$1" | sed -e 's/^        //'
+}
+
 extract_step "$ROOT/.github/workflows/nuget-release.yaml" validate > "$TMP/release.sh"
 extract_step "$ROOT/.github/workflows/nuget-relist.yaml" validate > "$TMP/relist.sh"
-for f in release relist; do
+extract_action_step "$ROOT/actions/nuget-publish/action.yaml" validate > "$TMP/publish.sh"
+for f in release relist publish; do
   if ! grep -q 'GITHUB_OUTPUT' "$TMP/$f.sh" || grep -q '^ *# ' "$TMP/$f.sh"; then
     echo "FAIL extract $f validate step (empty or polluted extraction)"; exit 1
   fi
@@ -109,6 +123,40 @@ check "relist: version '1.2.3;id' rejected" t
 
 t() { run_step relist PACKAGE_ID=$'x\n::warning::injected' VERSION=1.2.3; [ "$rc" = 1 ] && ! grep -q 'injected' "$ERR"; }
 check "relist: error message does not echo the raw input" t
+
+# ---- actions/nuget-publish: Validate inputs ----
+# The runner always sets every env: key (empty when the input is unset).
+pub_env=(PACKAGE_ID=Alloy.Api.Client VERSION=1.2.3 NUGET_USER=crucible UNLIST=false UNLIST_API_KEY= GITHUB_RELEASE=release RELEASE_TAG= ARTIFACT_NAME=)
+
+t() { run_step publish "${pub_env[@]}"
+  [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ] && [ "$(out_val tag)" = Alloy.Api.Client.1.2.3 ] \
+    && [ "$(out_val artifact)" = nupkg-Alloy.Api.Client-1.2.3 ]; }
+check "publish: defaults -> tag <id>.<version>, artifact nupkg-<id>-<version>" t
+
+t() { run_step publish "${pub_env[@]}" VERSION=v2.0.0-rc.1 RELEASE_TAG=custom-tag ARTIFACT_NAME=my-pkgs
+  [ "$rc" = 0 ] && [ "$(out_val version)" = 2.0.0-rc.1 ] && [ "$(out_val tag)" = custom-tag ] && [ "$(out_val artifact)" = my-pkgs ]; }
+check "publish: leading v stripped; release-tag and artifact-name overrides" t
+
+t() { run_step publish "${pub_env[@]}" NUGET_USER=; [ "$rc" = 1 ] && grep -q "nuget-user is empty" "$ERR" && [ ! -s "$OUT" ]; }
+check "publish: empty nuget-user rejected (unset vars.NUGET_USER)" t
+
+t() { run_step publish "${pub_env[@]}" UNLIST=true; [ "$rc" = 1 ] && grep -q "requires unlist-api-key" "$ERR"; }
+check "publish: unlist without unlist-api-key rejected" t
+
+t() { run_step publish "${pub_env[@]}" UNLIST=true UNLIST_API_KEY=k; [ "$rc" = 0 ]; }
+check "publish: unlist with unlist-api-key accepted" t
+
+t() { run_step publish "${pub_env[@]}" UNLIST=yes; [ "$rc" = 1 ] && grep -q "unlist must be" "$ERR"; }
+check "publish: invalid unlist rejected" t
+
+t() { run_step publish "${pub_env[@]}" GITHUB_RELEASE=maybe; [ "$rc" = 1 ] && grep -q "github-release must be" "$ERR"; }
+check "publish: invalid github-release rejected" t
+
+t() { run_step publish "${pub_env[@]}" VERSION=1.2.3+abc; [ "$rc" = 1 ] && [ ! -s "$OUT" ]; }
+check "publish: build metadata rejected" t
+
+t() { run_step publish "${pub_env[@]}" PACKAGE_ID=$'x\n::warning::injected'; [ "$rc" = 1 ] && ! grep -q 'injected' "$ERR"; }
+check "publish: error message does not echo the raw input" t
 
 echo "----"
 echo "$pass passed, $fail failed"

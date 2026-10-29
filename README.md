@@ -9,6 +9,7 @@ in this repository to keep shared automation consistent across applications.
   - [Update Helm Chart](#update-helm-chart)
   - [Repository Configuration Checklist](#repository-configuration-checklist)
   - [Header Check](#header-check)
+  - [NuGet Publish](#nuget-publish)
 - [Reusable Workflows](#reusable-workflows)
   - [Build & Publish Image](#build--publish-image)
   - [CodeQL](#codeql)
@@ -182,6 +183,88 @@ Some files should never receive the Crucible header — for example, vendored so
 ```
 
 Matched files are logged as `skipping (ignored): <path>` and left untouched. When no `.headerignore` file is present, every supported file is checked as before.
+
+### NuGet Publish
+
+`actions/nuget-publish` publishes a package packed by [NuGet Release](#nuget-release) with `auth-mode: trusted` to nuget.org using NuGet trusted publishing, so no long-lived push key is stored. It downloads the `nupkg-<PackageId>-<version>` run artifact, exchanges the job's OIDC token for a short-lived push key with `NuGet/login`, pushes, optionally unlists, and creates the GitHub release/tag, in the same order as NuGet Release's api-key path.
+
+It is a composite action and not a step of the reusable workflow because nuget.org only accepts a token whose `job_workflow_ref` claim is a workflow file **in the publishing repository**. A job of a reusable workflow carries the reusable workflow's claim (`cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@...`), which nuget.org rejects with HTTP 401. A composite action runs inside the calling job, so the claim names the caller's own workflow file.
+
+#### nuget.org setup
+
+On nuget.org, under **Trusted Publishing**, add a policy for the caller:
+
+- **Repository Owner:** `cmu-sei`
+- **Repository:** the API repository, e.g. `Alloy.Api`
+- **Workflow File:** the caller's file name only, e.g. `build-client.yml`
+- **Environment:** leave empty unless the publish job sets `environment:`
+
+`nuget-user` is the nuget.org profile name of the user who **created** that policy, not the owning organization and not an email address. Store it as an Actions variable (`vars.NUGET_USER`) or secret (`secrets.NUGET_USER`); both can be passed to an action's inputs.
+
+#### Inputs
+
+| Name | Required | Description | Default |
+| --- | --- | --- | --- |
+| `package-id` | ✅ | PackageId to publish (NuGet Release's `package-id` output). | |
+| `version` | ✅ | Package version (NuGet Release's `version` output). | |
+| `nuget-user` | ✅ | nuget.org profile name of the policy creator. | |
+| `artifact-name` |  | Run artifact holding the package. | `nupkg-<package-id>-<version>` |
+| `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention). | `false` |
+| `unlist-api-key` |  | nuget.org key with unlist scope, required with `unlist: true` (`NUGET_APIKEY_UNLIST`). The trusted-publishing key is used only for the push. | `""` |
+| `github-release` |  | `release` = tag + GitHub release with the `.nupkg` attached; `tag` = tag only; `none` = skip. | `release` |
+| `release-tag` |  | Tag name. | `<package-id>.<version>` |
+| `github-token` |  | Token that creates the tag/release. | `${{ github.token }}` |
+
+#### Required Permissions
+
+The calling job grants `id-token: write` (for `NuGet/login`) and `contents: write` (tag + GitHub release; `contents: read` with `github-release: none`).
+
+#### Example Usage
+
+API repository (`.github/workflows/build-client.yml`), shown for alloy.api. The `pack` job runs NuGet Release with `auth-mode: trusted`, which stops after uploading the package artifact; the `publish` job, defined in the caller's own file, publishes it:
+
+```yaml
+name: Build Client Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      clientVersion:
+        description: "Version of the Client package"
+        required: true
+
+permissions: {}
+
+jobs:
+  pack:
+    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@nuget-v1
+    permissions:
+      contents: read
+    with:
+      version: ${{ inputs.clientVersion }}
+      project: Alloy.Api.Client/Alloy.Api.Client.csproj
+      openapi-project: Alloy.Api
+      description: NSwag generated client for Crucible's Alloy.Api
+      auth-mode: trusted
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write          # tag + GitHub release with the .nupkg
+      id-token: write          # NuGet trusted publishing (OIDC -> short-lived push key)
+    steps:
+      - uses: cmu-sei/Crucible-Github-Actions/actions/nuget-publish@nuget-v1
+        with:
+          package-id: ${{ needs.pack.outputs.package-id }}
+          version: ${{ needs.pack.outputs.version }}
+          nuget-user: ${{ vars.NUGET_USER }}
+          unlist: true
+          unlist-api-key: ${{ secrets.NUGET_APIKEY_UNLIST }}
+```
+
+The action belongs to the `nuget` release family, so pin it with the same `nuget-v1` tag as NuGet Release.
 
 ## Reusable Workflows
 
@@ -380,8 +463,7 @@ Behaviour the callers rely on:
 | `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention; re-list with [NuGet Relist](#nuget-relist)). | `false` |
 | `github-release` |  | `release` = tag + GitHub release with the `.nupkg` attached; `tag` = tag only; `none` = skip. | `release` |
 | `release-tag` |  | Tag name. | `<PackageId>.<version>` |
-| `auth-mode` |  | `api-key` (`NUGET_APIKEY` secret) or `trusted` (NuGet trusted publishing; see [below](#trusted-publishing-later)). | `api-key` |
-| `nuget-user` |  | nuget.org account that owns the trusted-publishing policy (`auth-mode: trusted` only). | `""` |
+| `auth-mode` |  | `api-key` (push with the `NUGET_APIKEY` secret) or `trusted` (pack and upload the artifact only; the caller publishes with [NuGet Publish](#nuget-publish), see [Trusted publishing](#trusted-publishing)). | `api-key` |
 | `dry-run` |  | Build and pack only; skip push, unlist and GitHub release. | `false` |
 
 #### Secrets
@@ -391,7 +473,7 @@ Both are optional at the workflow level; which ones a caller needs depends on it
 | Name | Needed when | Description |
 | --- | --- | --- |
 | `NUGET_APIKEY` | `auth-mode: api-key` and not `dry-run` | nuget.org push key. |
-| `NUGET_APIKEY_UNLIST` | `unlist: true` and not `dry-run` | nuget.org key with unlist scope. |
+| `NUGET_APIKEY_UNLIST` | `unlist: true`, `auth-mode: api-key` and not `dry-run` | nuget.org key with unlist scope. |
 
 #### Outputs
 
@@ -407,10 +489,9 @@ The workflow declares no top-level `permissions:` block on purpose: a called wor
 ```yaml
 permissions:
   contents: write      # tag + GitHub release
-  # id-token: write    # only for auth-mode: trusted
 ```
 
-A `dry-run: true` caller needs nothing beyond `contents: read` (checkout).
+An `auth-mode: trusted` or `dry-run: true` caller needs nothing beyond `contents: read` (checkout); the trusted-publishing job that runs [NuGet Publish](#nuget-publish) grants its own permissions.
 
 #### Example Usage
 
@@ -508,29 +589,11 @@ To validate a new caller without credentials, add `dry-run: true` under `with:` 
 | vm.api | `src/Player.Vm.Api.Client/Player.Vm.Api.Client.csproj` | `src/Player.Vm.Api` | |
 | topomojo | `src/TopoMojo.Api.Client/TopoMojo.Api.Client.csproj` | `src/TopoMojo.Api` | Also `openapi-output: openapi.json` and `dotnet-version: "10.0.x"`; add a client `package.json` declaring `nswag`. |
 
-#### Trusted publishing (later)
+#### Trusted publishing
 
-Today every caller uses `auth-mode: api-key`. NuGet trusted publishing (OIDC via `NuGet/login`, exchanging the job's GitHub token for a short-lived push key) is already wired into the workflow so switching is mostly a caller change:
+nuget.org trusted publishing cannot run inside this reusable workflow: nuget.org requires the OIDC token's `job_workflow_ref` to be a workflow file in the publishing repository, and this workflow's job always carries its own (`cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@...`). With `auth-mode: trusted` the workflow therefore stops after the artifact upload, and the caller publishes from a job of its own with the [NuGet Publish](#nuget-publish) action; see its example for the complete caller and the nuget.org policy settings.
 
-```yaml
-# Phase 2 (trusted publishing): the only change in each caller
-jobs:
-  release:
-    uses: cmu-sei/Crucible-Github-Actions/.github/workflows/nuget-release.yaml@nuget-v1
-    permissions:
-      contents: write
-      id-token: write          # NEW: lets NuGet/login exchange the OIDC token
-    with:
-      # ...unchanged inputs...
-      auth-mode: trusted       # NEW
-      nuget-user: <nuget.org account that owns the trusted-publishing policy>
-    # secrets: NUGET_APIKEY no longer passed (NUGET_APIKEY_UNLIST still needed for unlist)
-```
-
-The shared workflow inherits the caller's grant, so nothing changes in it; api-key callers do not grant `id-token: write`. Open questions before switching:
-
-- How nuget.org trusted-publishing policies identify a reusable workflow: whether the policy names the caller's workflow file or this repository's `nuget-release.yaml`.
-- Whether the short-lived key issued by `NuGet/login` has unlist scope; until confirmed, `unlist: true` callers keep passing `NUGET_APIKEY_UNLIST`.
+Unlisting still uses `NUGET_APIKEY_UNLIST`, passed to the action as `unlist-api-key`; the short-lived trusted-publishing key is used only for the push.
 
 ### NuGet Relist
 
@@ -840,7 +903,7 @@ The job-level `if` keeps the workflow from starting a runner for other pull requ
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' input validation, the .NET build-and-test workflow's input validation and test-runner detection, the npm build-and-test workflow's input validation, and the Dependabot auto-merge workflow's input validation and gates), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' and the NuGet Publish action's input validation, the .NET build-and-test workflow's input validation and test-runner detection, the npm build-and-test workflow's input validation, and the Dependabot auto-merge workflow's input validation and gates), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
@@ -866,7 +929,7 @@ Each action family in this repository is versioned independently. Releases are t
 | `header` | Header Check composite action | `header-v1.0.1` |
 | `update-helm-chart` | Update Helm Chart composite action | `update-helm-chart-v3.2.0` |
 | `codeql` | `.github/workflows/codeql.yaml` | `codeql-v1.0.0` |
-| `nuget` | `.github/workflows/nuget-release.yaml`, `nuget-relist.yaml` | `nuget-v1.0.0` |
+| `nuget` | `.github/workflows/nuget-release.yaml`, `nuget-relist.yaml`, NuGet Publish composite action | `nuget-v1.0.0` |
 | `npm` | `.github/workflows/npm-release.yaml` | `npm-v1.0.0` |
 | `dotnet-test` | `.github/workflows/dotnet-test.yaml` | `dotnet-test-v1.0.0` |
 | `npm-test` | `.github/workflows/npm-test.yaml` | `npm-test-v1.0.0` |

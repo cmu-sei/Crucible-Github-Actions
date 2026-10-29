@@ -1,0 +1,127 @@
+name: NuGet Publish
+
+description: "Publishes a .nupkg packed by nuget-release.yaml (auth-mode: trusted) to nuget.org with NuGet trusted publishing, then optionally unlists it and creates the GitHub release/tag."
+
+inputs:
+  package-id:
+    description: "PackageId to publish (the nuget-release.yaml `package-id` output)"
+    required: true
+  version:
+    description: "Package version (the nuget-release.yaml `version` output)"
+    required: true
+  nuget-user:
+    description: "nuget.org profile name of the user who created the trusted-publishing policy (not an email address)"
+    required: true
+  artifact-name:
+    description: "Run artifact holding the package. Defaults to nupkg-<package-id>-<version>, the name nuget-release.yaml uploads."
+    default: ""
+  unlist:
+    description: "Unlist the version on nuget.org right after pushing (API client convention)"
+    default: "false"
+  unlist-api-key:
+    description: "nuget.org key with unlist scope (unlist: true). The trusted-publishing key is push-only."
+    default: ""
+  github-release:
+    description: "release = tag + GitHub release with the .nupkg attached; tag = tag only; none = skip"
+    default: release
+  release-tag:
+    description: "Tag name. Defaults to <package-id>.<version>."
+    default: ""
+  github-token:
+    description: "Token that creates the tag/release (the calling job grants contents: write)"
+    default: ${{ github.token }}
+
+# A composite action rather than a step in nuget-release.yaml: nuget.org only
+# accepts a trusted-publishing token whose job_workflow_ref claim is a workflow
+# file in the publishing repository, and a reusable workflow's job carries the
+# claim of the reusable workflow. A composite action runs inside the calling
+# job, so the claim names the caller's own workflow file.
+runs:
+  using: "composite"
+  steps:
+    - name: Validate inputs
+      id: validate
+      shell: bash
+      env:
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ inputs.version }}
+        NUGET_USER: ${{ inputs.nuget-user }}
+        UNLIST: ${{ inputs.unlist }}
+        UNLIST_API_KEY: ${{ inputs.unlist-api-key }}
+        GITHUB_RELEASE: ${{ inputs.github-release }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      # Error messages never echo the raw input (a newline in it could
+      # inject workflow commands).
+      run: |
+        set -euo pipefail
+        VERSION="${VERSION#v}"
+        semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+        [[ "$PACKAGE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::package-id input is not a valid NuGet package id (expected like Alloy.Api.Client)"; exit 1; }
+        [[ "$VERSION" =~ $semver ]] || { echo "::error::version input is not a valid SemVer version without build metadata (expected like 1.2.3 or 1.2.3-rc.1)"; exit 1; }
+        [ -n "$NUGET_USER" ] || { echo "::error::nuget-user is empty: pass the nuget.org profile name that created the trusted-publishing policy (e.g. from vars.NUGET_USER)"; exit 1; }
+        [[ "$UNLIST" =~ ^(true|false)$ ]] || { echo "::error::unlist must be true or false"; exit 1; }
+        [ "$UNLIST" = false ] || [ -n "$UNLIST_API_KEY" ] || { echo "::error::unlist: true requires unlist-api-key (the NUGET_APIKEY_UNLIST secret)"; exit 1; }
+        [[ "$GITHUB_RELEASE" =~ ^(release|tag|none)$ ]] || { echo "::error::github-release must be release, tag or none"; exit 1; }
+        {
+          echo "version=$VERSION"
+          echo "tag=${RELEASE_TAG:-$PACKAGE_ID.$VERSION}"
+          echo "artifact=${ARTIFACT_NAME:-nupkg-$PACKAGE_ID-$VERSION}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Download package artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ steps.validate.outputs.artifact }}
+        path: ${{ runner.temp }}/nuget-publish
+
+    - name: NuGet login (trusted publishing)
+      id: nuget-login
+      uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+      with:
+        user: ${{ inputs.nuget-user }}
+
+    - name: Push to nuget.org
+      shell: bash
+      env:
+        NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ steps.validate.outputs.version }}
+        DIR: ${{ runner.temp }}/nuget-publish
+      run: |
+        set -euo pipefail
+        # The matching .snupkg (if any) is pushed automatically alongside the .nupkg.
+        dotnet nuget push "$DIR/$PACKAGE_ID.$VERSION.nupkg" \
+          --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+    - name: Unlist on nuget.org
+      if: inputs.unlist == 'true'
+      shell: bash
+      env:
+        NUGET_API_KEY: ${{ inputs.unlist-api-key }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ steps.validate.outputs.version }}
+      run: |
+        set -euo pipefail
+        dotnet nuget delete "$PACKAGE_ID" "$VERSION" --non-interactive \
+          --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+    - name: Create GitHub release / tag
+      if: inputs.github-release != 'none'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.github-release }}
+        TAG: ${{ steps.validate.outputs.tag }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ steps.validate.outputs.version }}
+        DIR: ${{ runner.temp }}/nuget-publish
+      run: |
+        set -euo pipefail
+        if [ "$MODE" = release ]; then
+          gh release create "$TAG" "$DIR"/*.nupkg --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$PACKAGE_ID $VERSION" \
+            --notes "Published $PACKAGE_ID $VERSION to nuget.org."
+        else
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
+        fi

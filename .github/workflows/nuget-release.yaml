@@ -13,10 +13,11 @@
 # Order is build -> pack -> push -> (unlist) -> GitHub release/tag, so a failed
 # push never leaves an orphaned tag behind.
 #
-# Authentication: `auth-mode: api-key` (default) uses the NUGET_APIKEY secret.
-# `auth-mode: trusted` uses NuGet trusted publishing (OIDC via NuGet/login) and
-# needs no secret, but the caller must grant `id-token: write`. Switching later
-# is a caller-only change.
+# Authentication: `auth-mode: api-key` (default) pushes with the NUGET_APIKEY
+# secret. `auth-mode: trusted` (NuGet trusted publishing) stops after the
+# artifact upload: nuget.org rejects an OIDC token whose job_workflow_ref is a
+# workflow in another repository, which a job of this reusable workflow always
+# has. The caller publishes in a job of its own with actions/nuget-publish.
 
 name: NuGet Release
 
@@ -72,13 +73,9 @@ on:
         type: string
         default: ""
       auth-mode:
-        description: "api-key (NUGET_APIKEY secret) or trusted (NuGet trusted publishing; caller grants id-token: write)."
+        description: "api-key (push with the NUGET_APIKEY secret) or trusted (pack only; the caller publishes with actions/nuget-publish)."
         type: string
         default: api-key
-      nuget-user:
-        description: "nuget.org account that owns the trusted-publishing policy (auth-mode: trusted only)."
-        type: string
-        default: ""
       dry-run:
         description: "Build and pack only; skip push, unlist and GitHub release. Use to validate a caller."
         type: boolean
@@ -100,8 +97,8 @@ on:
 
 # No permissions block here on purpose: a called workflow that declares more
 # than its caller grants fails at startup, so jobs inherit the caller's grant
-# instead. Callers grant `contents: write` (release/tag), plus `id-token: write`
-# for auth-mode trusted; a dry-run caller may grant read-only (`contents: read`).
+# instead. api-key callers grant `contents: write` (release/tag); auth-mode
+# trusted and dry-run callers may grant read-only (`contents: read`).
 
 concurrency:
   group: nuget-release-${{ github.repository }}-${{ inputs.project }}
@@ -236,28 +233,21 @@ jobs:
           path: artifacts/
           if-no-files-found: error
 
-      - name: NuGet login (trusted publishing)
-        id: nuget-login
-        if: inputs.auth-mode == 'trusted' && !inputs.dry-run
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
-        with:
-          user: ${{ inputs.nuget-user }}
-
       - name: Push to nuget.org
-        if: "!inputs.dry-run"
+        if: inputs.auth-mode == 'api-key' && !inputs.dry-run
         env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY || secrets.NUGET_APIKEY }}
+          NUGET_API_KEY: ${{ secrets.NUGET_APIKEY }}
           PACKAGE_ID: ${{ steps.meta.outputs.package_id }}
           VERSION: ${{ steps.validate.outputs.version }}
         run: |
           set -euo pipefail
-          [ -n "$NUGET_API_KEY" ] || { echo "::error::No NuGet credential: pass NUGET_APIKEY or use auth-mode: trusted"; exit 1; }
+          [ -n "$NUGET_API_KEY" ] || { echo "::error::No NuGet credential: pass NUGET_APIKEY, or use auth-mode: trusted with actions/nuget-publish"; exit 1; }
           # The matching .snupkg (if any) is pushed automatically alongside the .nupkg.
           dotnet nuget push "artifacts/$PACKAGE_ID.$VERSION.nupkg" \
             --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
 
       - name: Unlist on nuget.org
-        if: inputs.unlist && !inputs.dry-run
+        if: inputs.unlist && inputs.auth-mode == 'api-key' && !inputs.dry-run
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_APIKEY_UNLIST }}
           PACKAGE_ID: ${{ steps.meta.outputs.package_id }}
@@ -269,7 +259,7 @@ jobs:
             --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
 
       - name: Create GitHub release / tag
-        if: inputs.github-release != 'none' && !inputs.dry-run
+        if: inputs.github-release != 'none' && inputs.auth-mode == 'api-key' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ inputs.github-release }}
