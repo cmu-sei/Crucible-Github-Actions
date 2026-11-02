@@ -2,8 +2,11 @@ import os
 import datetime
 import sys
 import fnmatch
+import re
 
-header_test = 'Released under a MIT (SEI)-style license'
+# A file is marked if it carries the license line, with either article: some repos
+# write "an MIT (SEI)-style license".
+header_test = re.compile(r'Released under an? MIT \(SEI\)-style license')
 header = 'Copyright ' + str(datetime.date.today().year) + ' Carnegie Mellon University. All Rights Reserved.\nReleased under a MIT (SEI)-style license. See LICENSE.md in the project root for license information.'
 
 use_block_comments = False
@@ -68,7 +71,7 @@ for root, dirs, files in os.walk("."):
             # open file & read it
             with open(os.path.join(root,file), 'r') as original: data = original.read()
             # check file for header
-            if (data.find(header_test) == -1):
+            if not header_test.search(data):
                 print(file)
                 comment_start = ''
                 comment_end = ''
