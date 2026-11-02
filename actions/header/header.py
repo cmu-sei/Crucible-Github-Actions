@@ -4,15 +4,27 @@ import sys
 import fnmatch
 import re
 
-# A file is marked if it carries the license line, with either article: some repos
-# write "an MIT (SEI)-style license".
-header_test = re.compile(r'Released under an? MIT \(SEI\)-style license')
-header = 'Copyright ' + str(datetime.date.today().year) + ' Carnegie Mellon University. All Rights Reserved.\nReleased under a MIT (SEI)-style license. See LICENSE.md in the project root for license information.'
+# Each license the header can carry: the pattern that marks a file as already
+# carrying it, and the line written when it doesn't. MIT (SEI) accepts either
+# article, because some repos write "an MIT (SEI)-style license".
+licenses = {
+    'mit-sei': (r'Released under an? MIT \(SEI\)-style license',
+                'Released under a MIT (SEI)-style license. See LICENSE.md in the project root for license information.'),
+    'bsd-3-clause': (r'Released under a 3 Clause BSD-style license',
+                     'Released under a 3 Clause BSD-style license. See LICENSE.md in the project root for license information.'),
+}
 
 use_block_comments = False
 
 if len(sys.argv) > 1:
     use_block_comments = sys.argv[1].lower() == 'true'
+
+license_name = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else 'mit-sei'
+if license_name not in licenses:
+    print('::error::license must be one of: ' + ', '.join(licenses))
+    sys.exit(1)
+header_test = re.compile(licenses[license_name][0])
+header = 'Copyright ' + str(datetime.date.today().year) + ' Carnegie Mellon University. All Rights Reserved.\n' + licenses[license_name][1]
 
 
 def load_ignore_patterns(path='.headerignore'):

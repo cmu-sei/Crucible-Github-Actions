@@ -9,6 +9,9 @@ inputs:
   use_block_comments:
     description: "Use block comments in header if true. Defaults to false"
     default: false
+  license:
+    description: "License the header carries: mit-sei (default) or bsd-3-clause (TopoMojo)."
+    default: mit-sei
 
 # Uses a composite action rather than a workflow
 # because a composite action can reference the local python script
@@ -35,9 +38,10 @@ runs:
         architecture: "x64"
 
     - name: Check for and Add Headers
-      run: python "$GITHUB_ACTION_PATH/header.py" "$USE_BLOCK_COMMENTS"
+      run: python "$GITHUB_ACTION_PATH/header.py" "$USE_BLOCK_COMMENTS" "$HEADER_LICENSE"
       env:
         USE_BLOCK_COMMENTS: ${{ inputs.use_block_comments }}
+        HEADER_LICENSE: ${{ inputs.license }}
       shell: bash
 
     - name: Git Diff
