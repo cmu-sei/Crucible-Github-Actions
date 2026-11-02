@@ -61,7 +61,7 @@ check() { # check <name> <condition-command...>
   if "$@"; then echo "PASS $name"; pass=$((pass + 1)); else echo "FAIL $name"; sed 's/^/    | /' "$ERR"; fail=$((fail + 1)); fi
 }
 
-ok_env=(AUTH_MODE=api-key GITHUB_RELEASE=release)
+ok_env=(AUTH_MODE=api-key GITHUB_RELEASE=release LICENSE_EXPRESSION=MIT)
 
 # ---- nuget-release.yaml: Validate inputs ----
 t() { run_step release "${ok_env[@]}" VERSION=1.2.3; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
@@ -88,14 +88,28 @@ check "release: leading space rejected" t
 t() { run_step release "${ok_env[@]}" VERSION=01.2.3; [ "$rc" = 1 ] && [ ! -s "$OUT" ]; }
 check "release: leading zero (01.2.3) rejected" t
 
-t() { run_step release VERSION=1.2.3 AUTH_MODE=bogus GITHUB_RELEASE=release; [ "$rc" = 1 ] && grep -q "auth-mode must be" "$ERR"; }
+t() { run_step release VERSION=1.2.3 AUTH_MODE=bogus GITHUB_RELEASE=release LICENSE_EXPRESSION=MIT; [ "$rc" = 1 ] && grep -q "auth-mode must be" "$ERR"; }
 check "release: invalid auth-mode rejected" t
 
-t() { run_step release VERSION=1.2.3 AUTH_MODE=api-key GITHUB_RELEASE=maybe; [ "$rc" = 1 ] && grep -q "github-release must be" "$ERR"; }
+t() { run_step release VERSION=1.2.3 AUTH_MODE=api-key GITHUB_RELEASE=maybe LICENSE_EXPRESSION=MIT; [ "$rc" = 1 ] && grep -q "github-release must be" "$ERR"; }
 check "release: invalid github-release rejected" t
 
-t() { run_step release VERSION=1.2.3 AUTH_MODE=trusted GITHUB_RELEASE=tag; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
+t() { run_step release VERSION=1.2.3 AUTH_MODE=trusted GITHUB_RELEASE=tag LICENSE_EXPRESSION=MIT; [ "$rc" = 0 ] && [ "$(out_val version)" = 1.2.3 ]; }
 check "release: trusted + tag accepted" t
+
+t() { run_step release "${ok_env[@]}" VERSION=1.2.3 LICENSE_EXPRESSION=MIT; [ "$rc" = 0 ]; }
+check "release: license-expression MIT accepted" t
+
+t() { run_step release "${ok_env[@]}" VERSION=1.2.3 LICENSE_EXPRESSION=''; [ "$rc" = 0 ]; }
+check "release: empty license-expression accepted (keeps the project's license)" t
+
+t() { run_step release "${ok_env[@]}" VERSION=1.2.3 LICENSE_EXPRESSION='(MIT OR Apache-2.0) AND GPL-2.0-or-later WITH Classpath-exception-2.0'; [ "$rc" = 0 ]; }
+check "release: compound SPDX license-expression accepted" t
+
+for bad in 'MIT;Apache-2.0' 'MIT,BSD-3-Clause' 'MIT%3B' '$(id)' ' MIT' $'MIT\n::warning::injected'; do
+  t() { run_step release "${ok_env[@]}" VERSION=1.2.3 LICENSE_EXPRESSION="$bad"; [ "$rc" = 1 ] && grep -q "license-expression must be" "$ERR" && ! grep -q 'injected\|uid=' "$ERR" && [ ! -s "$OUT" ]; }
+  check "release: license-expression $(printf %q "$bad") rejected without echoing it" t
+done
 
 # ---- nuget-release.yaml: Pack description escaping ----
 # The Pack step is not runnable locally; extract its escaping line and check
