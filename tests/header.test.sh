@@ -37,5 +37,33 @@ check "unmarked .ts header uses // comments" grep -q '^// Copyright [0-9]\{4\} C
 check "unmarked .html gets one <!-- --> header" grep -q '^<!-- Released under a MIT (SEI)-style license. See LICENSE.md in the project root for license information. -->$' "$REPO/src/none.html"
 check ".headerignore'd file left alone" cmp -s "$TMP/vendored.before" "$REPO/vendor/lib/vendored.js"
 
+# ---- license: bsd-3-clause (TopoMojo) ----
+BSD="$TMP/bsd"
+mkdir -p "$BSD/src"
+printf '// Copyright 2025 Carnegie Mellon University. All Rights Reserved.\n// Released under a 3 Clause BSD-style license. See LICENSE.md in the project root for license information.\n\nexport const b = 1;\n' > "$BSD/src/bsd.ts"
+printf 'export const none = 1;\n' > "$BSD/src/none.ts"
+cp "$BSD/src/bsd.ts" "$TMP/bsd.before"
+(cd "$BSD" && python3 "$ROOT/actions/header/header.py" false bsd-3-clause) > "$ERR" 2>&1
+rc=$?
+check "bsd-3-clause: header.py exits 0" test "$rc" = 0
+check "bsd-3-clause: existing BSD header left alone" cmp -s "$TMP/bsd.before" "$BSD/src/bsd.ts"
+check "bsd-3-clause: unmarked file gets the BSD line" grep -q '^// Released under a 3 Clause BSD-style license. See LICENSE.md in the project root for license information.$' "$BSD/src/none.ts"
+check "bsd-3-clause: unmarked file gets no MIT line" bash -c "! grep -q 'MIT (SEI)' '$BSD/src/none.ts'"
+
+# ---- license: default and unknown ----
+DEF="$TMP/default"
+mkdir -p "$DEF"
+printf 'export const none = 1;\n' > "$DEF/none.ts"
+(cd "$DEF" && python3 "$ROOT/actions/header/header.py" false '') > "$ERR" 2>&1
+check "empty license defaults to mit-sei" grep -q '^// Released under a MIT (SEI)-style license' "$DEF/none.ts"
+
+UNK="$TMP/unknown"
+mkdir -p "$UNK"
+printf 'export const none = 1;\n' > "$UNK/none.ts"
+cp "$UNK/none.ts" "$TMP/unknown.before"
+(cd "$UNK" && python3 "$ROOT/actions/header/header.py" false gpl) > "$ERR" 2>&1
+rc=$?
+check "unknown license fails without touching files" bash -c "[ $rc = 1 ] && grep -q 'license must be one of' '$ERR' && cmp -s '$TMP/unknown.before' '$UNK/none.ts'"
+
 echo "header: $pass passed, $fail failed"
 [ "$fail" = 0 ]
