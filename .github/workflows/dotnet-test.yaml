@@ -27,6 +27,10 @@ on:
         description: "Test assembly name the PostgreSQL banner names (defaults to the test-project directory name)."
         type: string
         default: ""
+      build-project:
+        description: "Project or solution to restore and build, relative to the repository root (e.g. the test project directory). Empty builds the repository root's solution, as before."
+        type: string
+        default: ""
       expect-postgres:
         description: "Fail unless the log shows the suite ran against PostgreSQL (the shared harness's banner)."
         type: boolean
@@ -46,7 +50,7 @@ on:
 
 # A newer run for the same pull request or branch supersedes one still in flight.
 concurrency:
-  group: dotnet-test-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}
+  group: dotnet-test-${{ github.repository }}-${{ github.workflow }}-${{ github.ref }}-${{ inputs.test-project }}
   cancel-in-progress: true
 
 jobs:
@@ -60,6 +64,7 @@ jobs:
         env:
           TEST_PROJECT: ${{ inputs.test-project }}
           TEST_ASSEMBLY: ${{ inputs.test-assembly }}
+          BUILD_PROJECT: ${{ inputs.build-project }}
         # Error messages never echo the raw input (a newline in it could
         # inject workflow commands).
         run: |
@@ -69,9 +74,15 @@ jobs:
           [[ "/$project/" != */../* && "/$project/" != */./* && "$project" != *//* ]] || { echo "::error::test-project must not contain '.', '..' or empty path segments"; exit 1; }
           assembly="${TEST_ASSEMBLY:-${project##*/}}"
           [[ "$assembly" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] || { echo "::error::test-assembly must be letters, digits, '.', '_' and '-'"; exit 1; }
+          build="${BUILD_PROJECT:-}"; build="${build%/}"
+          if [ -n "$build" ]; then
+            [[ "$build" =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] || { echo "::error::build-project must be a relative path of letters, digits, '.', '_', '-' and '/'"; exit 1; }
+            [[ "/$build/" != */../* && "/$build/" != */./* && "$build" != *//* ]] || { echo "::error::build-project must not contain '.', '..' or empty path segments"; exit 1; }
+          fi
           {
             echo "project=$project"
             echo "assembly=$assembly"
+            echo "build=$build"
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout
@@ -112,7 +123,9 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore
-        run: dotnet restore
+        env:
+          BUILD: ${{ steps.validate.outputs.build }}
+        run: dotnet restore ${BUILD:+"$BUILD"}
 
       # Under Microsoft.Testing.Platform the test project is built as a
       # Microsoft.Testing.Platform app, so `dotnet run` below runs it as one
@@ -120,11 +133,12 @@ jobs:
       - name: Build
         env:
           MODE: ${{ steps.runner.outputs.mode }}
+          BUILD: ${{ steps.validate.outputs.build }}
         run: |
           set -euo pipefail
           args=(--no-restore)
           if [[ "$MODE" == mtp ]]; then args+=(-p:UseMicrosoftTestingPlatformRunner=true); fi
-          dotnet build "${args[@]}"
+          dotnet build ${BUILD:+"$BUILD"} "${args[@]}"
 
       # Testcontainers starts and disposes the PostgreSQL container itself, so this job
       # intentionally has no `services: postgres:` block.
