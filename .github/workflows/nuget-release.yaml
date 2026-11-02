@@ -56,6 +56,10 @@ on:
         description: "Package description (defaults to the project's own <Description>)."
         type: string
         default: ""
+      license-expression:
+        description: "SPDX license expression for the package. Empty = keep the project's own license metadata (e.g. a <PackageLicenseFile>, which can't be combined with an expression)."
+        type: string
+        default: MIT
       include-symbols:
         description: "Also produce and push a .snupkg symbols package."
         type: boolean
@@ -119,8 +123,10 @@ jobs:
           VERSION: ${{ inputs.version }}
           AUTH_MODE: ${{ inputs.auth-mode }}
           GITHUB_RELEASE: ${{ inputs.github-release }}
+          LICENSE_EXPRESSION: ${{ inputs.license-expression }}
         # Error messages never echo the raw input (a newline in it could
-        # inject workflow commands).
+        # inject workflow commands). license-expression allows SPDX ids,
+        # WITH/AND/OR and parentheses: nothing MSBuild would split or un-escape.
         run: |
           set -euo pipefail
           VERSION="${VERSION#v}"
@@ -129,6 +135,8 @@ jobs:
           [[ "$VERSION" != *+* ]] || { echo "::error::build metadata (+...) is not supported: NuGet drops it from the package file name"; exit 1; }
           [[ "$AUTH_MODE" =~ ^(api-key|trusted)$ ]] || { echo "::error::auth-mode must be api-key or trusted"; exit 1; }
           [[ "$GITHUB_RELEASE" =~ ^(release|tag|none)$ ]] || { echo "::error::github-release must be release, tag or none"; exit 1; }
+          spdx='^[A-Za-z0-9(][A-Za-z0-9.+() -]*$'
+          [[ -z "$LICENSE_EXPRESSION" || "$LICENSE_EXPRESSION" =~ $spdx ]] || { echo "::error::license-expression must be an SPDX license expression (letters, digits, '.', '+', '-', parentheses and spaces) or empty"; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
@@ -205,6 +213,7 @@ jobs:
           VERSION: ${{ steps.validate.outputs.version }}
           DESCRIPTION: ${{ inputs.description }}
           SYMBOLS: ${{ inputs.include-symbols }}
+          LICENSE_EXPRESSION: ${{ inputs.license-expression }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
@@ -212,7 +221,6 @@ jobs:
             -p:PackageVersion="$VERSION" -p:Version="$VERSION"
             -p:Authors="Carnegie Mellon University/Software Engineering Institute"
             -p:Company="Carnegie Mellon University/Software Engineering Institute"
-            -p:PackageLicenseExpression=MIT
             -p:PackageProjectUrl=https://github.com/cmu-sei/crucible
             -p:RepositoryType=git -p:RepositoryUrl="$REPO_URL"
             -p:RepositoryCommit="$GITHUB_SHA")
@@ -222,6 +230,8 @@ jobs:
             d="${DESCRIPTION//\%/%25}"; d="${d//;/%3B}"; d="${d//,/%2C}"
             args+=(-p:Description="$d")
           fi
+          # Empty keeps the project's own license metadata.
+          if [ -n "$LICENSE_EXPRESSION" ]; then args+=(-p:PackageLicenseExpression="$LICENSE_EXPRESSION"); fi
           if [ "$SYMBOLS" = "true" ]; then args+=(-p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg); fi
           dotnet pack "$PROJECT" "${args[@]}"
           ls -l artifacts

@@ -458,6 +458,7 @@ Behaviour the callers rely on:
 | `openapi-output` |  | File name NSwag reads, written next to the client project (`openapi.json` for TopoMojo). | `swagger.json` |
 | `dotnet-version` |  | SDK to install when the repository has no `global.json` (e.g. `10.0.x`). Leave empty to use `global.json`. | `""` |
 | `description` |  | Package description. | the project's own `<Description>` |
+| `license-expression` |  | SPDX license expression for the package (letters, digits, `.`, `+`, `-`, parentheses, spaces). Empty keeps the project's own license metadata, e.g. a `<PackageLicenseFile>`, which NuGet won't combine with an expression (NU5033). | `MIT` |
 | `include-symbols` |  | Also produce and push a `.snupkg` symbols package. | `false` |
 | `unlist` |  | Unlist the version on nuget.org right after pushing (API client convention; re-list with [NuGet Relist](#nuget-relist)). | `false` |
 | `github-release` |  | `release` = tag + GitHub release with the `.nupkg` attached; `tag` = tag only; `none` = skip. | `release` |
