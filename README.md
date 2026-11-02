@@ -142,7 +142,7 @@ When the workflow runs on a release event it will push a feature branch directly
 
 ### Header Check
 
-`actions/header` enforces that every tracked file carries the standard Crucible license header. It can optionally use block comments when a language does not support line comments.
+`actions/header` enforces that every tracked file carries the standard Crucible license header. It can optionally use block comments when a language does not support line comments. A file already counts as marked if it contains `Released under a MIT (SEI)-style license` or `Released under an MIT (SEI)-style license`, so a repo's own header wording is not marked twice; paths listed in a `.headerignore` file (gitignore-style) are skipped.
 
 #### Inputs
 
