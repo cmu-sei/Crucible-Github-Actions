@@ -58,6 +58,17 @@ check "validate: nested path, trailing slash stripped, assembly is the last segm
 
 t() { run_step validate TEST_PROJECT=test/Example.Api.Tests TEST_ASSEMBLY=Example.Tests; [ "$rc" = 0 ] && [ "$(out_val assembly)" = Example.Tests ]; }
 check "validate: explicit test-assembly wins" t
+t() { run_step validate TEST_PROJECT=Example.Api.Tests; [ "$rc" = 0 ] && [ -z "$(out_val build)" ]; }
+check "validate: build-project defaults to empty (build the repository root)" t
+
+t() { run_step validate TEST_PROJECT=src/Example.Api.Tests BUILD_PROJECT=src/Example.Api.Tests/; [ "$rc" = 0 ] && [ "$(out_val build)" = src/Example.Api.Tests ]; }
+check "validate: build-project accepted, trailing slash stripped" t
+
+for bad in /abs/Example.sln ../Example.sln 'src/../x' 'a;b' '$(id)' ' src'; do
+  t() { run_step validate TEST_PROJECT=Ok.Tests BUILD_PROJECT="$bad"; [ "$rc" = 1 ] && grep -q "::error::build-project" "$ERR" && ! grep -q 'uid=' "$ERR" && [ ! -s "$OUT" ]; }
+  check "validate: build-project $(printf %q "$bad") rejected without echoing it" t
+done
+
 
 for bad in '' '/abs/Tests' '../Tests' 'a/../b' 'a/./b' './Tests' 'a//b' 'A Tests' 'Tests;id' 'Tests$(id)' $'Tests\n::warning::x'; do
   t() { run_step validate TEST_PROJECT="$bad"; [ "$rc" = 1 ] && [ ! -s "$OUT" ] && [ "$(wc -l < "$ERR")" = 1 ] && grep -qx "::error::test-project must [^:]*" "$ERR"; }

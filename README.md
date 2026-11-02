@@ -756,7 +756,7 @@ One job restores, builds and tests, then checks the log for the harness's `[<ass
 
 `dotnet run` is used rather than `dotnet test` for Microsoft.Testing.Platform because `dotnet test` does not forward the test app's console or xUnit diagnostic messages, so the banner would never reach the log. Either way the results land in `<test-project>/TestResults/test-results.trx`.
 
-Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>` with `cancel-in-progress: true`, so a newer push supersedes a run still in flight.
+Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>-<test-project>` with `cancel-in-progress: true`, so a newer push supersedes a run still in flight, while a caller with one job per test project runs them side by side.
 
 #### Inputs
 
@@ -764,6 +764,7 @@ Runs share the concurrency group `dotnet-test-<repository>-<workflow>-<ref>` wit
 | --- | --- | --- | --- |
 | `test-project` | ✅ | Test project directory, relative to the repository root (e.g. `Example.Api.Tests`, `src/Example.Api.Tests`). | |
 | `test-assembly` |  | Assembly name the PostgreSQL banner names. | `test-project` directory name |
+| `build-project` |  | Project or solution to restore and build, relative to the repository root. Set it to the test project when the solution contains a project that can't build from a clean checkout. | `""` (the repository root) |
 | `expect-postgres` |  | Fail unless the log shows the PostgreSQL banner. | `true` |
 | `dotnet-version` |  | SDK to install when the repository has no `global.json` (e.g. `10.0.x`). Leave empty to use `global.json`. | `""` |
 | `timeout-minutes` |  | Job timeout. | `30` |
