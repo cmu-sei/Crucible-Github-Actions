@@ -1,11 +1,16 @@
-# Reusable workflow: approve and queue auto-merge for Dependabot patch updates.
+# Reusable workflow: approve and queue auto-merge for Dependabot updates.
 #
 # Only acts on pull requests authored by `dependabot[bot]` in cmu-sei
-# repositories (forks and other authors are skipped). Patch updates, as
-# classified by Dependabot's own update-type metadata, are approved and queued
-# for auto-merge; minor and major updates are left for a human to review. For a
-# grouped pull request the update type is the group's largest bump, so a group
-# that contains any minor update is left for review.
+# repositories (forks and other authors are skipped). Updates whose type, as
+# classified by Dependabot's own update-type metadata, is within the
+# `update-types` input are approved and queued for auto-merge; the rest are
+# left for a human to review:
+#   * patch (default): semver-patch only.
+#   * minor: semver-patch and semver-minor.
+#   * all: semver-patch, semver-minor and semver-major.
+# An update with no semver update type is always left for review. For a
+# grouped pull request the update type is the group's largest bump, so with the
+# default a group that contains any minor update is left for review.
 #
 # The workflow never checks out code, so nothing from the pull request is
 # executed; it only reads Dependabot's metadata and calls the GitHub API.
@@ -43,6 +48,10 @@ on:
         description: "squash, merge or rebase."
         type: string
         default: squash
+      update-types:
+        description: "Largest update type to approve and merge: patch, minor (patch and minor) or all (patch, minor and major)."
+        type: string
+        default: patch
     secrets:
       CRUCIBLE_HELM_UPDATE_CLIENT_ID:
         description: "crucible-ci App client ID (token: app)."
@@ -68,27 +77,45 @@ jobs:
         env:
           TOKEN: ${{ inputs.token }}
           MERGE_METHOD: ${{ inputs.merge-method }}
+          UPDATE_TYPES: ${{ inputs.update-types }}
         # Error messages never echo the raw input (a newline in it could
         # inject workflow commands).
         run: |
           set -euo pipefail
           [[ "$TOKEN" =~ ^(github-token|app)$ ]] || { echo "::error::token must be github-token or app"; exit 1; }
           [[ "$MERGE_METHOD" =~ ^(squash|merge|rebase)$ ]] || { echo "::error::merge-method must be squash, merge or rebase"; exit 1; }
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-          echo "merge_method=$MERGE_METHOD" >> "$GITHUB_OUTPUT"
+          [[ "$UPDATE_TYPES" =~ ^(patch|minor|all)$ ]] || { echo "::error::update-types must be patch, minor or all"; exit 1; }
+          {
+            echo "token=$TOKEN"
+            echo "merge_method=$MERGE_METHOD"
+            echo "update_types=$UPDATE_TYPES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fetch Dependabot metadata
         id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
-      - name: Leave non-patch update for review
-        if: steps.meta.outputs.update-type != 'version-update:semver-patch'
+      - name: Decide whether to merge
+        id: decide
         env:
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
-        run: echo "::notice::Leaving $UPDATE_TYPE update for human review."
+          UPDATE_TYPES: ${{ steps.validate.outputs.update_types }}
+        run: |
+          set -euo pipefail
+          case "$UPDATE_TYPES:$UPDATE_TYPE" in
+            patch:version-update:semver-patch | \
+            minor:version-update:semver-patch | minor:version-update:semver-minor | \
+            all:version-update:semver-patch | all:version-update:semver-minor | all:version-update:semver-major)
+              echo "merge=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "merge=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::Leaving ${UPDATE_TYPE:-untyped} update for human review (update-types: $UPDATE_TYPES)."
+              ;;
+          esac
 
       - name: Check App credentials
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch' && steps.validate.outputs.token == 'app'
+        if: steps.decide.outputs.merge == 'true' && steps.validate.outputs.token == 'app'
         env:
           CLIENT_ID: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
           PRIVATE_KEY: ${{ secrets.CRUCIBLE_HELM_UPDATE_PRIVATE_KEY }}
@@ -101,7 +128,7 @@ jobs:
 
       - name: Mint crucible-ci App token
         id: app-token
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch' && steps.validate.outputs.token == 'app'
+        if: steps.decide.outputs.merge == 'true' && steps.validate.outputs.token == 'app'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.CRUCIBLE_HELM_UPDATE_CLIENT_ID }}
@@ -113,7 +140,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Approve and enable auto-merge
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        if: steps.decide.outputs.merge == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}

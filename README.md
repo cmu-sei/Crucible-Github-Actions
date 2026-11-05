@@ -847,7 +847,9 @@ The status-check context is `<caller job id> / Build and Test`, here `build-test
 
 ### Dependabot Auto-merge
 
-`.github/workflows/dependabot-auto-merge.yaml` is a `workflow_call` reusable workflow that approves and queues auto-merge for Dependabot **patch** updates. Minor and major updates are left for a person. It acts only on pull requests opened by `dependabot[bot]` in `cmu-sei` repositories, reads the update type from Dependabot's own metadata (`dependabot/fetch-metadata`), and never checks out code. For a grouped pull request the update type is the group's largest bump, so a group that contains any minor update is left for review.
+`.github/workflows/dependabot-auto-merge.yaml` is a `workflow_call` reusable workflow that approves and queues auto-merge for Dependabot updates up to the `update-types` input: **patch** updates by default, or patch and minor (`minor`), or every semver update (`all`). Anything larger is left for a person, and so is an update with no semver update type. It acts only on pull requests opened by `dependabot[bot]` in `cmu-sei` repositories, reads the update type from Dependabot's own metadata (`dependabot/fetch-metadata`), and never checks out code. For a grouped pull request the update type is the group's largest bump, so with the default a group that contains any minor update is left for review.
+
+Keep the default unless the repository's required checks would catch a bad major update. `all` suits a repository such as a documentation site, where a strict build checks the whole product; hold back a dependency whose majors need a person with an `ignore` rule in `dependabot.yml`.
 
 The approval and merge use one of two tokens (`token` input):
 
@@ -863,7 +865,7 @@ Repository settings, configured in this order:
 
 Configure the required status checks **before** enabling auto-merge: otherwise the approval satisfies the one-review rule and a patch update can merge before CI finishes. With auto-merge disabled, the merge step fails on purpose so the misconfiguration is visible.
 
-This workflow approves and merges with write access in every calling repository, and a floating tag carries a change to all of them at once. Treat a change to its behaviour as a minor release (`[release:minor]`), and keep `tests/dependabot-auto-merge.test.sh` covering the patch-only and author gates.
+This workflow approves and merges with write access in every calling repository, and a floating tag carries a change to all of them at once. Treat a change to its behaviour as a minor release (`[release:minor]`), and keep `tests/dependabot-auto-merge.test.sh` covering the update-type and author gates.
 
 #### Inputs
 
@@ -871,6 +873,7 @@ This workflow approves and merges with write access in every calling repository,
 | --- | --- | --- | --- |
 | `token` |  | `github-token` or `app` (see above). | `github-token` |
 | `merge-method` |  | `squash`, `merge` or `rebase`. | `squash` |
+| `update-types` |  | Largest update type to approve and merge: `patch`, `minor` (patch and minor) or `all` (patch, minor and major). | `patch` |
 
 #### Secrets
 
