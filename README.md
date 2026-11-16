@@ -39,6 +39,7 @@ The action:
 - bumps the chart `version` based on the release type
 - optionally bumps parent charts
 - pushes a feature branch to the Helm charts repository and opens a PR
+- skips all of the above when the release notes contain `<!-- helm-chart-pr: false -->` or `enabled` is `false` (see [Skipping the helm-charts PR](#skipping-the-helm-charts-pr))
 
 #### Inputs
 
@@ -56,9 +57,11 @@ The action:
 | `git_user_email` |  | Commit author email (`41898282+github-actions[bot]@users.noreply.github.com`). |
 | `settings_file` |  | Path in the calling repo to the app settings file (e.g. `Player.Api/appsettings.json`). When set, enables the settings-sync phase. Omit to disable. |
 | `settings_file_kind` |  | One of `dotnet-appsettings`, `dotnet-conf`, or `angular-settings`. Required when `settings_file` is set. |
+| `enabled` |  | `true` (default) or `false`, in any case; empty counts as `true`, so an unset repository variable keeps the default. When `false`, the action skips every step and opens no PR. |
 
 #### Outputs
 
+- `skipped` – `true` when the run was skipped by `enabled: false` or the release-notes marker (every other output is then empty), otherwise `false`
 - `new_app_version` – parsed version string, e.g. `2.5.2`
 - `release_type` – computed release type (`major`/`minor`/`patch`)
 - `new_chart_version` – bumped chart version
@@ -70,6 +73,24 @@ The action:
 - `settings_added` – JSON object mapping added flattened setting keys to their leaf type
 - `settings_removed` – JSON array of removed flattened setting keys
 - `previous_release_tag` – resolved previous release tag (empty when no prior tag exists)
+
+#### Skipping the helm-charts PR
+
+By default every published release opens a helm-charts PR. To publish a release without one, put this line anywhere in the release notes:
+
+```markdown
+<!-- helm-chart-pr: false -->
+```
+
+GitHub does not render HTML comments, so the line does not show on the release page. Matching ignores case and the spaces around `helm-chart-pr:` and `false`. Notes without the line, or with `helm-chart-pr: true`, open the PR as before. On a skipped run the first step prints a notice in the job log and the run's annotations (`Skipping the helm-charts PR because the release notes contain <!-- helm-chart-pr: false -->.`), and every later step is skipped, so no branch is pushed and no PR is opened. The job still succeeds.
+
+This is for releasing several apps at once. A bulk release is followed by one combined helm-charts PR covering every app, with setting defaults taken from the apps, so a per-app bot PR would only be superseded. A release of a single app leaves the marker out and gets its PR automatically.
+
+The flag lives in the release notes because a `release` event carries nothing else a person or script can set per release: the release form has only a title, notes, a tag and a pre-release checkbox. The check lives in this action rather than in each calling workflow. All 21 Crucible app repositories call this action through the floating `update-helm-chart-v3` tag, so a minor release here reaches every one of them at once. Putting a job-level `if:` in each app's `update-helm-chart.yml` instead would take 21 PRs across 21 repositories, and any repository that missed one would keep opening superseded PRs. The cost of checking here is a runner that starts and stops within seconds on a skipped release.
+
+`enabled: false` skips the action for every run of a calling workflow, regardless of the release notes. Use it to switch automatic PRs off for one repository.
+
+A skipped release leaves the chart's `appVersion` behind, so the next release that does open a PR bumps the chart version from there. It does not carry over settings added or removed in the skipped release; the combined PR has to include those.
 
 #### Settings sync (optional)
 
@@ -908,7 +929,7 @@ The job-level `if` keeps the workflow from starting a runner for other pull requ
 
 ## Continuous integration
 
-`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' and the NuGet Publish action's input validation, the .NET build-and-test workflow's input validation and test-runner detection, the npm build-and-test workflow's input validation, and the Dependabot auto-merge workflow's input validation and gates), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
+`.github/workflows/ci.yaml` runs on every pull request and on pushes to `main`: `actionlint` (pinned, checksum-verified, with shellcheck) over all workflows (composite `action.yaml` files are not linted by actionlint), every `tests/*.test.sh` (the shell logic of the shared CodeQL plan job, the NuGet and npm workflows' and the NuGet Publish action's input validation, the .NET build-and-test workflow's input validation and test-runner detection, the npm build-and-test workflow's input validation, the Dependabot auto-merge workflow's input validation and gates, and the Update Helm Chart action's skip gate), and the `actions/update-helm-chart` pytest suite. The `CodeQL` workflow (`.github/workflows/codeql-analysis.yml`) additionally scans this repository's Python and Actions code.
 
 The `main` ruleset should list these required status-check contexts, exactly as written: `actionlint`, `codeql-plan-tests`, `update-helm-chart-tests`, `codeql / Plan languages`, `codeql / Analyze (python)`, `codeql / Analyze (actions)`. A status-check context is the job name, not `<workflow> / <job>` (the UI prefixes the workflow name only for grouping); for the CodeQL self-scan, which calls a reusable workflow, the context is `<caller job id> / <called job name>`.
 
