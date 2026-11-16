@@ -487,7 +487,10 @@ def test_no_previous_tag_treats_prev_as_empty(tmp_path: Path, monkeypatch):
 
 
 def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkeypatch):
-    """Vm.Api 3.13.0's Proxmox settings came through as 0 and broke the chart."""
+    """Vm.Api 3.13.0's Proxmox settings came through as 0 and broke the chart.
+
+    Numbers and bools take the app's value, large numbers quoted; strings stay blank.
+    """
     app_repo = tmp_path / "app"
     app_repo.mkdir()
     helm_repo = tmp_path / "helm"
@@ -516,7 +519,8 @@ def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkey
             "ValidateCertificate": true,
             "SdnZone": "lab",
             "Patterns": ["^CASTER_SECRET_"]
-          }
+          },
+          "IsoUpload": { "MaxFileSize": 6000000000 }
         }
         """
     )
@@ -543,8 +547,9 @@ def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkey
         "Proxmox__GuestStateRefreshIntervalSeconds: 30\n"
         "Proxmox__GuestAgentTimeoutMilliseconds: 2000\n"
         "Proxmox__ValidateCertificate: true\n"
-        'Proxmox__SdnZone: "lab"\n'
-        'Proxmox__Patterns__0: "^CASTER_SECRET_"\n'
+        'Proxmox__SdnZone: ""\n'
+        'Proxmox__Patterns__0: ""\n'
+        'IsoUpload__MaxFileSize: "6000000000"\n'
     )
     assert child_values.read_text() == "env:\n  Proxmox__StateRefreshIntervalSeconds: 5\n" + "".join(
         "  " + line + "\n" for line in added.splitlines()

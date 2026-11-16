@@ -8,10 +8,10 @@ Rules (spec: Dotnet-appsettings patcher):
   * Under a subkey (e.g. "player-api" in parent values.yaml) the env: block
     is NOT created. If missing, we skip — parent values.yaml is hand-curated.
   * Additions are appended at the end of the env: block.
-  * Values: the key's entry in `defaults` when the caller passes one (the
-    value appsettings.json sets, so the chart keeps the app's behavior), with
-    strings double-quoted. Otherwise a blank by type: string -> "",
-    bool -> False, number -> 0.
+  * Values (see `_value_for`): a number or bool takes its entry in `defaults`
+    (the value appsettings.json sets), with numbers of 1e6 or more quoted.
+    Strings, and keys with no entry (dotnet-conf), get a blank by type:
+    string -> "", bool -> False, number -> 0.
   * Removals delete the key line in place; preceding comments are left alone.
   * Whitespace and dedented comments trailing the env: block stay trailing it,
     rather than being pushed between the old and new last keys — see
@@ -36,15 +36,36 @@ _BLANK_BY_TYPE: Mapping[LeafType, object] = {
 }
 
 
+# Helm loads values-file numbers as float64, and the API charts render env values with
+# `tpl ($val | toString)`, which writes 1e6 and larger in scientific notation: 6000000000
+# becomes "6e+09", and .NET's configuration binder can't read that as an int or long. Quoted,
+# the number reaches the app as written.
+_QUOTE_NUMBERS_FROM = 1_000_000
+
+
 def _value_for(
     key: str, leaf_type: LeafType, defaults: Optional[Mapping[str, object]]
 ) -> object:
-    if defaults is not None and key in defaults:
-        value = defaults[key]
-        if isinstance(value, str):
-            return DoubleQuotedScalarString(value)
-        if isinstance(value, (bool, int, float)):
-            return value
+    """The chart value for a key that is new in this release.
+
+    Numbers and bools take the appsettings.json value, because that is what the
+    app uses when the key isn't set: 0 or false in a chart can change what the
+    app does. Strings get "", as most of the hand-written charts' strings are:
+    appsettings.json strings are largely localhost URLs, connection strings and
+    development credentials, which don't belong in a chart. A key with no value
+    (dotnet-conf passes none) gets the blank for its type.
+    """
+    value = defaults.get(key) if defaults else None
+    if leaf_type is LeafType.BOOL and isinstance(value, bool):
+        return value
+    if (
+        leaf_type is LeafType.NUMBER
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        if abs(value) >= _QUOTE_NUMBERS_FROM:
+            return DoubleQuotedScalarString(str(value))
+        return value
     return _BLANK_BY_TYPE[leaf_type]
 
 

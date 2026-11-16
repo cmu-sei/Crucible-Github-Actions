@@ -100,7 +100,7 @@ When `settings_file` and `settings_file_kind` are set, the action additionally d
 - Mirrors the same changes under the parent chart's subkey in the parent `values.yaml` when `parent_chart_file` is set and the subkey's block already exists. The subkey is derived from the chart folder name.
 - Appends a "Settings changes to review" section to the helm-charts PR body listing added/removed keys so a human can update the hand-curated chart README.
 
-For `dotnet-appsettings`, a new key is inserted with the value the new `appsettings.json` gives it (strings double-quoted), because that is what the app uses when the setting isn't given: a blank such as `0` can change the app's behavior. A key with no value there, and every new key for `dotnet-conf` and `angular-settings`, gets a blank placeholder by type (`""`, `false`, `0`): a sample `.conf`'s commented lines are mostly examples (`# Pod__Url = pve1.local`), and an Angular `settings.json` holds development URLs. A key the chart already has is never changed. No README edits are made automatically. Re-running the action for the same release is a no-op.
+For `dotnet-appsettings`, a new number or bool key is inserted with the value the new `appsettings.json` gives it, because that is what the app uses when the setting isn't given: a blank such as `0` or `false` can change the app's behavior. Numbers of 1,000,000 or more are written as quoted strings, because the API charts render env values with `tpl ($val | toString)`, which turns an unquoted `6000000000` into `6e+09`, a value .NET's configuration binder can't read as an `int` or `long`. A new string key gets `""`, as most strings in the hand-written charts are: `appsettings.json` strings are largely localhost URLs, connection strings and development credentials, which don't belong in a chart. Every new key for `dotnet-conf` and `angular-settings` gets a blank placeholder by type (`""`, `false`, `0`), because a sample `.conf`'s commented lines are mostly examples (`# Pod__Url = pve1.local`), and an Angular `settings.json` holds development URLs. A key the chart already has is never changed. No README edits are made automatically. Re-running the action for the same release is a no-op.
 
 Only the added and removed key lines change. The `values.yaml` files are edited as a YAML round-trip, so comments, quoting, block-sequence indentation (the `helm create` style, with list items indented under their key), and long unindented scalars are all preserved. Additions are appended inside the patched block: a blank line separating it from the next key stays after the new keys, and so do any comments dedented out of the block to introduce that next key. This matters because helm-charts compares a parent chart's subkey block against the child `values.yaml` as raw text in CI — any incidental reformatting desyncs the pair and fails the check.
 
@@ -112,13 +112,13 @@ Both kinds target ASP.NET Core configuration files and emit the same `Section__K
 | --- | --- | --- |
 | **File format** | JSON (with optional JSONC `//` and `/* */` comments) | INI-style: `Section__Key = value`, optionally prefixed with `#` to comment out a default |
 | **Typical filename** | `appsettings.json` | `appsettings.conf` |
-| **Values for new keys** | The value the JSON sets, as a string, bool or number | None: the format is untyped, so every new key is added as `""` |
+| **Values for new keys** | Numbers and bools: the value the JSON sets (1,000,000 or more quoted). Strings: `""` | None: the format is untyped, so every new key is added as `""` |
 | **Nested objects** | Walks the JSON tree to build `Section__Key` keys | Authors already write `Section__Key` directly; the parser just collects them line-by-line |
 | **Scalar arrays** | First element emitted as `Key__0` | Authors typically write `Key__0 = ...` directly; collected as-is |
 | **Comments** | JSONC line/block comments stripped before parsing | Lines starting with `#` (including dividers like `####`) are tolerated; entries are recognized whether commented out or active |
 | **Duplicate keys** | Last value wins (standard JSON semantics) | First occurrence wins; later duplicates (e.g., the example/dev sections at the bottom of `appsettings.conf`) are ignored |
 
-If the source file is a hybrid you control, prefer `dotnet-appsettings` so new keys get their real defaults. Use `dotnet-conf` when the upstream project distributes a `.conf` file — feeding that text to the JSON parser would fail.
+If the source file is a hybrid you control, prefer `dotnet-appsettings` so new number and bool keys get their real defaults. Use `dotnet-conf` when the upstream project distributes a `.conf` file — feeding that text to the JSON parser would fail.
 
 When `settings_file` is set the action checks out the calling repository at `release_tag` with full tag history into a `source/` sub-path. Consumers do not need to add their own `actions/checkout` step.
 

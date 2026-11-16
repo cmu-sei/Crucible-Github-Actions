@@ -5,7 +5,7 @@ import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ruamel.yaml import YAML
 
@@ -96,11 +96,10 @@ def run(
             f"Settings file {settings_file!r} not found at {release_tag}."
         )
 
-    prev_flat = _parse_and_flatten(prev_content or "{}", settings_file_kind)
-    new_flat = _parse_and_flatten(new_content, settings_file_kind)
+    prev_flat, _ = _parse_and_flatten(prev_content or "{}", settings_file_kind)
+    new_flat, defaults = _parse_and_flatten(new_content, settings_file_kind)
 
     diff = compute_diff(prev_flat, new_flat)
-    defaults = _defaults(new_content, settings_file_kind)
 
     child_values_path = (
         helm_repo_dir / Path(chart_file).parent / "values.yaml"
@@ -141,33 +140,29 @@ def run(
     )
 
 
-def _parse_and_flatten(raw: str, kind: str) -> Dict[str, LeafType]:
+def _parse_and_flatten(
+    raw: str, kind: str
+) -> Tuple[Dict[str, LeafType], Dict[str, Any]]:
+    """Each key's type, and, for dotnet-appsettings only, each key's value.
+
+    The value map feeds the dotnet patcher's defaults (see patch_dotnet._value_for).
+    The other kinds return none, so their new keys keep blank placeholders: see
+    flatten.py.
+    """
     if kind == "dotnet-appsettings":
         cleaned = strip_jsonc_comments(raw)
         try:
             data = json.loads(cleaned) if cleaned.strip() else {}
         except json.JSONDecodeError as exc:
             raise SettingsSyncError(f"Failed to parse appsettings: {exc}")
-        return flatten_dotnet(data)
+        return flatten_dotnet(data), flatten_dotnet_defaults(data)
     if kind == "dotnet-conf":
-        return flatten_dotnet_conf(raw)
+        return flatten_dotnet_conf(raw), {}
     try:
         data = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError as exc:
         raise SettingsSyncError(f"Failed to parse angular settings: {exc}")
-    return flatten_angular(data)
-
-
-def _defaults(raw: str, kind: str) -> Dict[str, Any]:
-    """Each key's value in the new settings file, for dotnet-appsettings only.
-
-    The other kinds keep blank placeholders: see flatten.py.
-    """
-    if kind != "dotnet-appsettings":
-        return {}
-    cleaned = strip_jsonc_comments(raw)
-    data = json.loads(cleaned) if cleaned.strip() else {}
-    return flatten_dotnet_defaults(data)
+    return flatten_angular(data), {}
 
 
 def _apply(

@@ -134,7 +134,7 @@ def test_scalar_array_added_as_index_zero_string():
     assert 'CorsPolicy__Origins__0: ""' in _dump(data)
 
 
-def test_added_keys_take_their_defaults_and_strings_are_quoted():
+def test_added_numbers_and_bools_take_their_defaults_and_strings_stay_blank():
     data = _roundtrip(
         textwrap.dedent(
             """\
@@ -150,6 +150,7 @@ def test_added_keys_take_their_defaults_and_strings_are_quoted():
             "Proxmox__GuestStateRefreshIntervalSeconds": LeafType.NUMBER,
             "Terraform__GenerateTopology": LeafType.BOOL,
             "Terraform__Secrets__Patterns__0": LeafType.STRING,
+            "ClientSettings__CiteApiUrl": LeafType.STRING,
             "Not__InDefaults": LeafType.NUMBER,
         },
         removed=[],
@@ -157,6 +158,7 @@ def test_added_keys_take_their_defaults_and_strings_are_quoted():
             "Proxmox__GuestStateRefreshIntervalSeconds": 30,
             "Terraform__GenerateTopology": True,
             "Terraform__Secrets__Patterns__0": "^CASTER_SECRET_",
+            "ClientSettings__CiteApiUrl": "http://localhost:4720/",
         },
     )
     assert changed is True
@@ -166,8 +168,45 @@ def test_added_keys_take_their_defaults_and_strings_are_quoted():
           Existing__Key: ""
           Proxmox__GuestStateRefreshIntervalSeconds: 30
           Terraform__GenerateTopology: true
-          Terraform__Secrets__Patterns__0: "^CASTER_SECRET_"
+          Terraform__Secrets__Patterns__0: ""
+          ClientSettings__CiteApiUrl: ""
           Not__InDefaults: 0
+        """
+    )
+
+
+def test_numbers_of_a_million_or_more_are_quoted():
+    """Helm renders an unquoted 6000000000 as "6e+09", which .NET can't bind to a long."""
+    data = _roundtrip("env:\n  Existing__Key: \"\"\n")
+    added = {
+        "IsoUpload__MaxFileSize": LeafType.NUMBER,
+        "Exactly__AMillion": LeafType.NUMBER,
+        "Large__Negative": LeafType.NUMBER,
+        "Just__UnderAMillion": LeafType.NUMBER,
+        "Some__Ratio": LeafType.NUMBER,
+    }
+    patch_values(
+        data,
+        subkey=None,
+        added=added,
+        removed=[],
+        defaults={
+            "IsoUpload__MaxFileSize": 6000000000,
+            "Exactly__AMillion": 1000000,
+            "Large__Negative": -2000000,
+            "Just__UnderAMillion": 999999,
+            "Some__Ratio": 0.5,
+        },
+    )
+    assert _dump(data) == textwrap.dedent(
+        """\
+        env:
+          Existing__Key: ""
+          IsoUpload__MaxFileSize: "6000000000"
+          Exactly__AMillion: "1000000"
+          Large__Negative: "-2000000"
+          Just__UnderAMillion: 999999
+          Some__Ratio: 0.5
         """
     )
 
