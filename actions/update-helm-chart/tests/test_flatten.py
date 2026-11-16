@@ -2,6 +2,7 @@ from settings_sync.flatten import (
     flatten_angular,
     flatten_dotnet,
     flatten_dotnet_conf,
+    flatten_dotnet_defaults,
     LeafType,
 )
 
@@ -134,3 +135,26 @@ def test_dotnet_conf_lines_without_equals_are_ignored():
 """
     result = flatten_dotnet_conf(raw)
     assert result == {"Oidc__Audience": LeafType.STRING}
+
+
+def test_dotnet_defaults_keep_each_leaf_value_for_the_same_keys():
+    data = {
+        "Terraform": {
+            "GenerateTopology": True,
+            "Secrets": {"Patterns": ["^CASTER_SECRET_"], "MinimumMaskedLength": 8},
+            "Topology": {"Machines": {}},
+        },
+        "Proxmox": {"GuestAgentTimeoutMilliseconds": 2000, "Ratio": 0.5, "Name": ""},
+        "Infrastructure": {"Connections": []},
+        "Unset": None,
+    }
+    defaults = flatten_dotnet_defaults(data)
+    assert defaults == {
+        "Terraform__GenerateTopology": True,
+        "Terraform__Secrets__Patterns__0": "^CASTER_SECRET_",
+        "Terraform__Secrets__MinimumMaskedLength": 8,
+        "Proxmox__GuestAgentTimeoutMilliseconds": 2000,
+        "Proxmox__Ratio": 0.5,
+        "Proxmox__Name": "",
+    }
+    assert defaults.keys() == flatten_dotnet(data).keys()

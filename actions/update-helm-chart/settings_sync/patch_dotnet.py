@@ -8,7 +8,10 @@ Rules (spec: Dotnet-appsettings patcher):
   * Under a subkey (e.g. "player-api" in parent values.yaml) the env: block
     is NOT created. If missing, we skip — parent values.yaml is hand-curated.
   * Additions are appended at the end of the env: block.
-  * Blank values: string -> "", bool -> False, number -> 0.
+  * Values: the key's entry in `defaults` when the caller passes one (the
+    value appsettings.json sets, so the chart keeps the app's behavior), with
+    strings double-quoted. Otherwise a blank by type: string -> "",
+    bool -> False, number -> 0.
   * Removals delete the key line in place; preceding comments are left alone.
   * Whitespace and dedented comments trailing the env: block stay trailing it,
     rather than being pushed between the old and new last keys — see
@@ -33,11 +36,24 @@ _BLANK_BY_TYPE: Mapping[LeafType, object] = {
 }
 
 
+def _value_for(
+    key: str, leaf_type: LeafType, defaults: Optional[Mapping[str, object]]
+) -> object:
+    if defaults is not None and key in defaults:
+        value = defaults[key]
+        if isinstance(value, str):
+            return DoubleQuotedScalarString(value)
+        if isinstance(value, (bool, int, float)):
+            return value
+    return _BLANK_BY_TYPE[leaf_type]
+
+
 def patch_values(
     doc: CommentedMap,
     subkey: Optional[str],
     added: Dict[str, LeafType],
     removed: List[str],
+    defaults: Optional[Mapping[str, object]] = None,
 ) -> bool:
     if not added and not removed:
         return False
@@ -58,7 +74,7 @@ def patch_values(
     for key, leaf_type in added.items():
         if key in container:
             continue
-        container[key] = _BLANK_BY_TYPE[leaf_type]
+        container[key] = _value_for(key, leaf_type, defaults)
         modified = True
 
     last_after = next(reversed(container), None) if container else None

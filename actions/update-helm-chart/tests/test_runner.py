@@ -484,3 +484,108 @@ def test_no_previous_tag_treats_prev_as_empty(tmp_path: Path, monkeypatch):
     )
     assert result.previous_tag is None
     assert set(result.added.keys()) == {"A", "B"}
+
+
+def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkeypatch):
+    """Vm.Api 3.13.0's Proxmox settings came through as 0 and broke the chart."""
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+    helm_repo = tmp_path / "helm"
+    child_values = helm_repo / "charts" / "player" / "charts" / "vm-api" / "values.yaml"
+    parent_values = helm_repo / "charts" / "player" / "values.yaml"
+    _write(child_values, "env:\n  Proxmox__StateRefreshIntervalSeconds: 5\n")
+    _write(parent_values, "vm-api:\n  env:\n    Proxmox__StateRefreshIntervalSeconds: 5\n")
+
+    prev = textwrap.dedent(
+        """\
+        {
+          "Proxmox": {
+            "StateRefreshIntervalSeconds": 5 // How often to reconcile power state
+          }
+        }
+        """
+    )
+    new = textwrap.dedent(
+        """\
+        {
+          "Proxmox": {
+            "StateRefreshIntervalSeconds": 5, // How often to reconcile power state
+            "GuestStateRefreshIntervalSeconds": 30, // Snapshot and IP state
+            /* How long to wait on a guest-agent query */
+            "GuestAgentTimeoutMilliseconds": 2000,
+            "ValidateCertificate": true,
+            "SdnZone": "lab",
+            "Patterns": ["^CASTER_SECRET_"]
+          }
+        }
+        """
+    )
+    fake = _FakeGit(
+        tags=["3.13.0", "3.12.1"],
+        files={
+            ("3.12.1", "src/Player.Vm.Api/appsettings.json"): prev,
+            ("3.13.0", "src/Player.Vm.Api/appsettings.json"): new,
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="src/Player.Vm.Api/appsettings.json",
+        settings_file_kind="dotnet-appsettings",
+        chart_file="charts/player/charts/vm-api/Chart.yaml",
+        parent_chart_file="charts/player/Chart.yaml",
+        release_tag="3.13.0",
+    )
+
+    added = (
+        "Proxmox__GuestStateRefreshIntervalSeconds: 30\n"
+        "Proxmox__GuestAgentTimeoutMilliseconds: 2000\n"
+        "Proxmox__ValidateCertificate: true\n"
+        'Proxmox__SdnZone: "lab"\n'
+        'Proxmox__Patterns__0: "^CASTER_SECRET_"\n'
+    )
+    assert child_values.read_text() == "env:\n  Proxmox__StateRefreshIntervalSeconds: 5\n" + "".join(
+        "  " + line + "\n" for line in added.splitlines()
+    )
+    assert parent_values.read_text() == (
+        "vm-api:\n  env:\n    Proxmox__StateRefreshIntervalSeconds: 5\n"
+        + "".join("    " + line + "\n" for line in added.splitlines())
+    )
+
+
+def test_dotnet_conf_added_keys_stay_blank_whatever_the_file_says(
+    tmp_path: Path, monkeypatch
+):
+    """A sample .conf's commented values are examples, not defaults."""
+    app_repo = tmp_path / "app"
+    app_repo.mkdir()
+    helm_repo = tmp_path / "helm"
+    child_values = helm_repo / "charts" / "topomojo" / "charts" / "topomojo-api" / "values.yaml"
+    _write(child_values, "env:\n  Existing__Key: \"\"\n")
+
+    fake = _FakeGit(
+        tags=["2.10.2", "2.10.1"],
+        files={
+            ("2.10.1", "src/TopoMojo.Api/appsettings.conf"): "# Existing__Key =\n",
+            ("2.10.2", "src/TopoMojo.Api/appsettings.conf"): (
+                "# Existing__Key =\n# Pod__Url = pve1.local\n# Pod__Password = changeme\n"
+            ),
+        },
+    )
+    monkeypatch.setattr(runner, "git_io", fake)
+
+    runner.run(
+        app_repo_dir=app_repo,
+        helm_repo_dir=helm_repo,
+        settings_file="src/TopoMojo.Api/appsettings.conf",
+        settings_file_kind="dotnet-conf",
+        chart_file="charts/topomojo/charts/topomojo-api/Chart.yaml",
+        parent_chart_file=None,
+        release_tag="2.10.2",
+    )
+
+    assert child_values.read_text() == (
+        'env:\n  Existing__Key: ""\n  Pod__Url: ""\n  Pod__Password: ""\n'
+    )

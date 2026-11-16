@@ -5,7 +5,7 @@ import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ruamel.yaml import YAML
 
@@ -16,6 +16,7 @@ from .flatten import (
     flatten_angular,
     flatten_dotnet,
     flatten_dotnet_conf,
+    flatten_dotnet_defaults,
 )
 from .jsonc import strip_jsonc_comments
 from . import patch_angular, patch_dotnet
@@ -99,6 +100,7 @@ def run(
     new_flat = _parse_and_flatten(new_content, settings_file_kind)
 
     diff = compute_diff(prev_flat, new_flat)
+    defaults = _defaults(new_content, settings_file_kind)
 
     child_values_path = (
         helm_repo_dir / Path(chart_file).parent / "values.yaml"
@@ -112,7 +114,12 @@ def run(
     subkey = Path(chart_file).parent.name
 
     child_modified = _apply(
-        child_values_path, settings_file_kind, None, diff.added, diff.removed
+        child_values_path,
+        settings_file_kind,
+        None,
+        diff.added,
+        diff.removed,
+        defaults,
     )
     parent_modified = False
     if parent_values_path is not None:
@@ -122,6 +129,7 @@ def run(
             subkey,
             diff.added,
             diff.removed,
+            defaults,
         )
 
     return RunResult(
@@ -150,12 +158,25 @@ def _parse_and_flatten(raw: str, kind: str) -> Dict[str, LeafType]:
     return flatten_angular(data)
 
 
+def _defaults(raw: str, kind: str) -> Dict[str, Any]:
+    """Each key's value in the new settings file, for dotnet-appsettings only.
+
+    The other kinds keep blank placeholders: see flatten.py.
+    """
+    if kind != "dotnet-appsettings":
+        return {}
+    cleaned = strip_jsonc_comments(raw)
+    data = json.loads(cleaned) if cleaned.strip() else {}
+    return flatten_dotnet_defaults(data)
+
+
 def _apply(
     values_path: Path,
     kind: str,
     subkey: Optional[str],
     added: Dict[str, LeafType],
     removed: List[str],
+    defaults: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     if not values_path.exists():
         return False
@@ -164,7 +185,7 @@ def _apply(
         return False
 
     if kind in ("dotnet-appsettings", "dotnet-conf"):
-        changed = patch_dotnet.patch_values(doc, subkey, added, removed)
+        changed = patch_dotnet.patch_values(doc, subkey, added, removed, defaults)
     else:
         changed = patch_angular.patch_values(doc, subkey, added, removed)
 
