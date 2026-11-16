@@ -51,7 +51,14 @@ inputs:
     description: "Strategy for parsing settings_file. One of: dotnet-appsettings, dotnet-conf, angular-settings. Required when settings_file is set."
     required: false
     default: ""
+  enabled:
+    description: "Set to false to skip the action (no branch, no PR); empty counts as true. A release whose notes contain <!-- helm-chart-pr: false --> is skipped as well."
+    required: false
+    default: "true"
 outputs:
+  skipped:
+    description: "True when the run was skipped by enabled: false or the release-notes marker; every other output is then empty."
+    value: ${{ steps.gate.outputs.skipped }}
   new_app_version:
     description: "Normalized application version extracted from the release tag."
     value: ${{ steps.update.outputs.new_app_version }}
@@ -89,8 +96,42 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Releases cut in bulk (several apps at once) are followed by one combined
+    # helm-charts PR, so a per-app bot PR would only be superseded. Such
+    # releases carry the marker in their notes; the release form has no other
+    # field to hold it. Checking here rather than in each app's workflow keeps
+    # every app's workflow unchanged.
+    # An empty `enabled` counts as the default (e.g. an unset repository variable).
+    - name: Check whether to open a helm-charts PR
+      id: gate
+      shell: bash
+      env:
+        ENABLED: ${{ inputs.enabled }}
+        RELEASE_BODY: ${{ github.event.release.body }}
+      run: |
+        case "${ENABLED,,}" in
+          true | "") pr_enabled=true ;;
+          false) pr_enabled=false ;;
+          *)
+            echo "::error::enabled must be 'true' or 'false'"
+            exit 1
+            ;;
+        esac
+        marker='<!--[[:space:]]*helm-chart-pr:[[:space:]]*false[[:space:]]*-->'
+        shopt -s nocasematch
+        if [ "$pr_enabled" = false ]; then
+          echo "::notice title=Helm chart PR skipped::Skipping the helm-charts PR because the enabled input is false."
+          echo "skipped=true" >> "$GITHUB_OUTPUT"
+        elif [[ "$RELEASE_BODY" =~ $marker ]]; then
+          echo "::notice title=Helm chart PR skipped::Skipping the helm-charts PR because the release notes contain <!-- helm-chart-pr: false -->."
+          echo "skipped=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Derive Helm repo owner/name
       id: repo_meta
+      if: steps.gate.outputs.skipped == 'false'
       shell: bash
       env:
         HELM_REPO: ${{ inputs.helm_chart_repo }}
@@ -107,6 +148,7 @@ runs:
     - name: Mint Helm charts app token
       id: mint_token
       if: >
+        (steps.gate.outputs.skipped == 'false') &&
         (inputs.github_app_client_id != '') &&
         (inputs.github_app_private_key != '')
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -117,7 +159,7 @@ runs:
         repositories: ${{ steps.repo_meta.outputs.name }}
 
     - name: Checkout source repository
-      if: inputs.settings_file != ''
+      if: steps.gate.outputs.skipped == 'false' && inputs.settings_file != ''
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ github.repository }}
@@ -127,6 +169,7 @@ runs:
         persist-credentials: false
 
     - name: Checkout Helm charts repository
+      if: steps.gate.outputs.skipped == 'false'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: ${{ inputs.helm_chart_repo }}
@@ -135,11 +178,13 @@ runs:
         ref: main
 
     - name: Set up Python
+      if: steps.gate.outputs.skipped == 'false'
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.14"
 
     - name: Install Python dependencies
+      if: steps.gate.outputs.skipped == 'false'
       run: |
         python3 -m pip install --upgrade pip
         python3 -m pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
@@ -147,6 +192,7 @@ runs:
 
     - name: Update Helm chart metadata
       id: update
+      if: steps.gate.outputs.skipped == 'false'
       env:
         SOURCE_REPO: ${{ github.repository }}
         CHART_FILE: ${{ inputs.chart_file }}
@@ -170,7 +216,7 @@ runs:
       shell: bash
 
     - name: Derive README path
-      if: inputs.parent_chart_file != ''
+      if: steps.gate.outputs.skipped == 'false' && inputs.parent_chart_file != ''
       id: readme
       shell: bash
       env:
