@@ -8,9 +8,9 @@ Rules (spec: Dotnet-appsettings patcher):
   * Under a subkey (e.g. "player-api" in parent values.yaml) the env: block
     is NOT created. If missing, we skip — parent values.yaml is hand-curated.
   * Additions are appended at the end of the env: block.
-  * Values (see `_value_for`): a number or bool takes its entry in `defaults`
-    (the value appsettings.json sets), with numbers of 1e6 or more quoted.
-    Strings, and keys with no entry (dotnet-conf), get a blank by type:
+  * Values (see `value_for`): a key takes its entry in `defaults` (the value
+    appsettings.json sets), with strings and numbers of 1e6 or more quoted.
+    Keys with no entry (dotnet-conf passes none) get a blank by type:
     string -> "", bool -> False, number -> 0.
   * Removals delete the key line in place; preceding comments are left alone.
   * Whitespace and dedented comments trailing the env: block stay trailing it,
@@ -19,6 +19,7 @@ Rules (spec: Dotnet-appsettings patcher):
 """
 from __future__ import annotations
 
+import json
 from typing import Dict, List, Mapping, Optional
 
 from ruamel.yaml.comments import CommentedMap
@@ -43,19 +44,21 @@ _BLANK_BY_TYPE: Mapping[LeafType, object] = {
 _QUOTE_NUMBERS_FROM = 1_000_000
 
 
-def _value_for(
+def value_for(
     key: str, leaf_type: LeafType, defaults: Optional[Mapping[str, object]]
 ) -> object:
     """The chart value for a key that is new in this release.
 
-    Numbers and bools take the appsettings.json value, because that is what the
-    app uses when the key isn't set: 0 or false in a chart can change what the
-    app does. Strings get "", as most of the hand-written charts' strings are:
-    appsettings.json strings are largely localhost URLs, connection strings and
-    development credentials, which don't belong in a chart. A key with no value
-    (dotnet-conf passes none) gets the blank for its type.
+    Every type takes the appsettings.json value, because that is what the app
+    uses when the key isn't set: a blank such as "", 0 or false in a chart's
+    env: block sets the key and can change what the app does. Strings are often
+    development values (localhost URLs, connection strings), so the PR body
+    lists every value written for a reviewer to replace where needed. A key
+    with no value (dotnet-conf passes none) gets the blank for its type.
     """
     value = defaults.get(key) if defaults else None
+    if leaf_type is LeafType.STRING and isinstance(value, str):
+        return DoubleQuotedScalarString(value)
     if leaf_type is LeafType.BOOL and isinstance(value, bool):
         return value
     if (
@@ -67,6 +70,15 @@ def _value_for(
             return DoubleQuotedScalarString(str(value))
         return value
     return _BLANK_BY_TYPE[leaf_type]
+
+
+def rendered(value: object) -> str:
+    """A chart value as it reads in values.yaml, for the PR body."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(str(value))
+    return str(value)
 
 
 def patch_values(
@@ -95,7 +107,7 @@ def patch_values(
     for key, leaf_type in added.items():
         if key in container:
             continue
-        container[key] = _value_for(key, leaf_type, defaults)
+        container[key] = value_for(key, leaf_type, defaults)
         modified = True
 
     last_after = next(reversed(container), None) if container else None

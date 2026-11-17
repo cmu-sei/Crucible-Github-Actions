@@ -12,9 +12,8 @@ Three strategies:
     treated as a STRING leaf since the .conf format is untyped.
 
 flatten_dotnet_defaults walks the same tree as flatten_dotnet but keeps each
-leaf's value, so the dotnet patcher can write an added number or bool key's
-real default (strings stay blank: see patch_dotnet._value_for). The other two
-kinds have no equivalent: a sample .conf's commented lines are
+leaf's value, so the dotnet patcher can write an added key's real default
+(see patch_dotnet.value_for). The other two kinds have no equivalent: a sample .conf's commented lines are
 mostly examples (`# Pod__Url = pve1.local`), and an Angular settings.json holds
 development URLs, so their keys keep blank placeholders.
 
@@ -58,8 +57,8 @@ def flatten_dotnet_defaults(data: Any) -> Dict[str, Any]:
     """Same keys as flatten_dotnet, mapped to the value the file sets.
 
     An appsettings.json value is what the app uses when the setting isn't
-    given. The dotnet patcher writes it for new number and bool keys, where a
-    blank by type (0, false) would change the app's behavior.
+    given. The dotnet patcher writes it for new keys, where a blank by type
+    ("", 0, false) would change the app's behavior.
     """
     result: Dict[str, Any] = {}
     _walk_dotnet(data, [], result, lambda value: value)

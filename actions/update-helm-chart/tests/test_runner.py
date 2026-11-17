@@ -489,7 +489,7 @@ def test_no_previous_tag_treats_prev_as_empty(tmp_path: Path, monkeypatch):
 def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkeypatch):
     """Vm.Api 3.13.0's Proxmox settings came through as 0 and broke the chart.
 
-    Numbers and bools take the app's value, large numbers quoted; strings stay blank.
+    Every key takes the app's value, with strings and large numbers quoted.
     """
     app_repo = tmp_path / "app"
     app_repo.mkdir()
@@ -533,7 +533,7 @@ def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkey
     )
     monkeypatch.setattr(runner, "git_io", fake)
 
-    runner.run(
+    result = runner.run(
         app_repo_dir=app_repo,
         helm_repo_dir=helm_repo,
         settings_file="src/Player.Vm.Api/appsettings.json",
@@ -547,10 +547,18 @@ def test_dotnet_added_keys_get_their_appsettings_defaults(tmp_path: Path, monkey
         "Proxmox__GuestStateRefreshIntervalSeconds: 30\n"
         "Proxmox__GuestAgentTimeoutMilliseconds: 2000\n"
         "Proxmox__ValidateCertificate: true\n"
-        'Proxmox__SdnZone: ""\n'
-        'Proxmox__Patterns__0: ""\n'
+        'Proxmox__SdnZone: "lab"\n'
+        'Proxmox__Patterns__0: "^CASTER_SECRET_"\n'
         'IsoUpload__MaxFileSize: "6000000000"\n'
     )
+    assert result.added_values == {
+        "Proxmox__GuestStateRefreshIntervalSeconds": "30",
+        "Proxmox__GuestAgentTimeoutMilliseconds": "2000",
+        "Proxmox__ValidateCertificate": "true",
+        "Proxmox__SdnZone": '"lab"',
+        "Proxmox__Patterns__0": '"^CASTER_SECRET_"',
+        "IsoUpload__MaxFileSize": '"6000000000"',
+    }
     assert child_values.read_text() == "env:\n  Proxmox__StateRefreshIntervalSeconds: 5\n" + "".join(
         "  " + line + "\n" for line in added.splitlines()
     )
@@ -581,7 +589,7 @@ def test_dotnet_conf_added_keys_stay_blank_whatever_the_file_says(
     )
     monkeypatch.setattr(runner, "git_io", fake)
 
-    runner.run(
+    result = runner.run(
         app_repo_dir=app_repo,
         helm_repo_dir=helm_repo,
         settings_file="src/TopoMojo.Api/appsettings.conf",
@@ -590,6 +598,7 @@ def test_dotnet_conf_added_keys_stay_blank_whatever_the_file_says(
         parent_chart_file=None,
         release_tag="2.10.2",
     )
+    assert result.added_values == {"Pod__Url": '""', "Pod__Password": '""'}
 
     assert child_values.read_text() == (
         'env:\n  Existing__Key: ""\n  Pod__Url: ""\n  Pod__Password: ""\n'

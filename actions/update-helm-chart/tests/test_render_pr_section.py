@@ -43,3 +43,24 @@ def test_render_pr_section_cli_empty_input_prints_nothing():
         check=True,
     )
     assert proc.stdout.strip() == ""
+
+
+def test_render_pr_section_cli_lists_added_values():
+    script = Path(__file__).resolve().parents[1] / "render_pr_section.py"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--source-repo", "cmu-sei/Vm.Api",
+            "--release-tag", "3.13.0",
+            "--readme-path", "",
+            "--added", json.dumps({"A__Key": "number", "B__Url": "string"}),
+            "--added-values", json.dumps({"A__Key": "30", "B__Url": '"http://localhost/"'}),
+            "--removed", "[]",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "- `A__Key`: `30`" in proc.stdout
+    assert '- `B__Url`: `"http://localhost/"`' in proc.stdout

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -33,6 +33,8 @@ class RunResult:
     removed: List[str]
     child_modified: bool
     parent_modified: bool
+    # Each added key's value as written to values.yaml (YAML text), for the PR body.
+    added_values: Dict[str, str] = field(default_factory=dict)
 
 
 # Round-trip settings chosen so that re-emitting an untouched values.yaml is a
@@ -131,12 +133,20 @@ def run(
             defaults,
         )
 
+    # `defaults` is empty for dotnet-conf and angular-settings, so their keys
+    # report the blank each patcher writes.
+    added_values = {
+        key: patch_dotnet.rendered(patch_dotnet.value_for(key, leaf_type, defaults))
+        for key, leaf_type in diff.added.items()
+    }
+
     return RunResult(
         previous_tag=prev_tag,
         added=diff.added,
         removed=diff.removed,
         child_modified=child_modified,
         parent_modified=parent_modified,
+        added_values=added_values,
     )
 
 
@@ -145,7 +155,7 @@ def _parse_and_flatten(
 ) -> Tuple[Dict[str, LeafType], Dict[str, Any]]:
     """Each key's type, and, for dotnet-appsettings only, each key's value.
 
-    The value map feeds the dotnet patcher's defaults (see patch_dotnet._value_for).
+    The value map feeds the dotnet patcher's defaults (see patch_dotnet.value_for).
     The other kinds return none, so their new keys keep blank placeholders: see
     flatten.py.
     """

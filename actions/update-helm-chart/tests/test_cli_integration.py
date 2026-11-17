@@ -79,6 +79,7 @@ def test_cli_end_to_end_emits_settings_outputs(tmp_path: Path) -> None:
     output = gh_out.read_text()
     assert "settings_changed=true" in output
     assert "settings_added=" in output
+    assert "settings_added_values=" in output
     assert "previous_release_tag=v2.5.0" in output
 
     values_text = (chart_dir / "values.yaml").read_text()

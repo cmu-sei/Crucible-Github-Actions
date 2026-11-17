@@ -225,6 +225,7 @@ def handle_update(args: argparse.Namespace) -> int:
         )
 
     settings_added: Dict[str, str] = {}
+    settings_added_values: Dict[str, str] = {}
     settings_removed: list = []
     previous_release_tag = ""
     settings_changed = False
@@ -244,6 +245,7 @@ def handle_update(args: argparse.Namespace) -> int:
             release_tag=args.release_tag,
         )
         settings_added = {k: v.value for k, v in sync.added.items()}
+        settings_added_values = dict(sync.added_values)
         settings_removed = list(sync.removed)
         previous_release_tag = sync.previous_tag or ""
         settings_changed = bool(settings_added or settings_removed)
@@ -263,6 +265,7 @@ def handle_update(args: argparse.Namespace) -> int:
         "branch_name": branch_name,
         "has_changes": has_changes,
         "settings_added": settings_added,
+        "settings_added_values": settings_added_values,
         "settings_removed": settings_removed,
         "settings_changed": settings_changed,
         "previous_release_tag": previous_release_tag,
@@ -287,6 +290,7 @@ def handle_update(args: argparse.Namespace) -> int:
             "branch_name": branch_name,
             "has_changes": has_changes,
             "settings_added": settings_added,
+            "settings_added_values": settings_added_values,
             "settings_removed": settings_removed,
             "settings_changed": settings_changed,
             "previous_release_tag": previous_release_tag,

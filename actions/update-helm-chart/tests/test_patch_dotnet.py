@@ -134,7 +134,7 @@ def test_scalar_array_added_as_index_zero_string():
     assert 'CorsPolicy__Origins__0: ""' in _dump(data)
 
 
-def test_added_numbers_and_bools_take_their_defaults_and_strings_stay_blank():
+def test_added_keys_take_their_defaults_with_strings_quoted():
     data = _roundtrip(
         textwrap.dedent(
             """\
@@ -168,8 +168,8 @@ def test_added_numbers_and_bools_take_their_defaults_and_strings_stay_blank():
           Existing__Key: ""
           Proxmox__GuestStateRefreshIntervalSeconds: 30
           Terraform__GenerateTopology: true
-          Terraform__Secrets__Patterns__0: ""
-          ClientSettings__CiteApiUrl: ""
+          Terraform__Secrets__Patterns__0: "^CASTER_SECRET_"
+          ClientSettings__CiteApiUrl: "http://localhost:4720/"
           Not__InDefaults: 0
         """
     )
