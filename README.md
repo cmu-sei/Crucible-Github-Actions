@@ -836,7 +836,7 @@ Runs share the concurrency group `npm-test-<repository>-<workflow>-<ref>` with `
 | `install-command` |  | Installs dependencies. | `npm ci` |
 | `test-command` |  | Runs the tests once (no watch mode). | `npm run test:coverage` |
 | `lint-command` |  | Lints before the tests, e.g. `npm run lint`. Empty skips the step. | `""` |
-| `format-command` |  | Checks formatting after the lint, without changing files, e.g. `npm run format:check` (`prettier --check .`). Empty skips the step. | `""` |
+| `format-command` |  | Checks formatting after the lint, e.g. `npm run format:check` (`prettier --check .`). The step also fails if tracked files changed, so a command that rewrites files (`prettier --write .`) can't pass. Empty skips the step. | `""` |
 | `build-command` |  | Builds after the tests, e.g. `npx ng build --configuration production`. Empty skips the step. | `""` |
 | `coverage-path` |  | Coverage directory uploaded as the `coverage` artifact. Empty skips the upload. | `coverage` |
 | `timeout-minutes` |  | Job timeout. | `20` |
@@ -865,6 +865,8 @@ jobs:
       contents: read
     with:
       node-version: "24"
+      lint-command: npm run lint
+      format-command: npm run format:check
       build-command: npx ng build --configuration production
 ```
 

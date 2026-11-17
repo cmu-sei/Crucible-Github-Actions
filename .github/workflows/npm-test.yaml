@@ -31,7 +31,7 @@ on:
         type: string
         default: ""
       format-command:
-        description: "Shell command that checks formatting without changing files, run after the lint (e.g. npm run format:check). Empty = skip."
+        description: "Shell command that checks formatting, run after the lint (e.g. npm run format:check). The step also fails if tracked files changed. Empty = skip."
         type: string
         default: ""
       build-command:
@@ -109,7 +109,11 @@ jobs:
         if: inputs.format-command != ''
         env:
           FORMAT_COMMAND: ${{ inputs.format-command }}
-        run: bash -euo pipefail -c "$FORMAT_COMMAND"
+        # git diff catches a command that rewrites files (prettier --write)
+        # instead of checking them, which would otherwise pass.
+        run: |
+          bash -euo pipefail -c "$FORMAT_COMMAND"
+          git diff --exit-code || { echo "::error::Tracked files changed during the run (diff above). Run the format command locally and commit the result."; exit 1; }
 
       - name: Test
         env:
