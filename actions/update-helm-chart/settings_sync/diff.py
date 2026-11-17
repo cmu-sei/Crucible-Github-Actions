@@ -1,8 +1,8 @@
 """Compute added and removed leaf paths between two flattened maps.
 
-Modifications (same path, different LeafType) are intentionally ignored:
-values.yaml uses blank placeholders, so a type change in the source doesn't
-affect the chart.
+Modifications (same path, different LeafType or value) are intentionally
+ignored: once a key is in values.yaml its value is the chart's own, so a change
+in the source doesn't affect the chart.
 """
 from __future__ import annotations
 

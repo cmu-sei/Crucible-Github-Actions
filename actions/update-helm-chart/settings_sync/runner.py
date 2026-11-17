@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ruamel.yaml import YAML
 
@@ -16,6 +16,7 @@ from .flatten import (
     flatten_angular,
     flatten_dotnet,
     flatten_dotnet_conf,
+    flatten_dotnet_defaults,
 )
 from .jsonc import strip_jsonc_comments
 from . import patch_angular, patch_dotnet
@@ -32,6 +33,8 @@ class RunResult:
     removed: List[str]
     child_modified: bool
     parent_modified: bool
+    # Each added key's value as written to values.yaml (YAML text), for the PR body.
+    added_values: Dict[str, str] = field(default_factory=dict)
 
 
 # Round-trip settings chosen so that re-emitting an untouched values.yaml is a
@@ -95,8 +98,8 @@ def run(
             f"Settings file {settings_file!r} not found at {release_tag}."
         )
 
-    prev_flat = _parse_and_flatten(prev_content or "{}", settings_file_kind)
-    new_flat = _parse_and_flatten(new_content, settings_file_kind)
+    prev_flat, _ = _parse_and_flatten(prev_content or "{}", settings_file_kind)
+    new_flat, defaults = _parse_and_flatten(new_content, settings_file_kind)
 
     diff = compute_diff(prev_flat, new_flat)
 
@@ -112,7 +115,12 @@ def run(
     subkey = Path(chart_file).parent.name
 
     child_modified = _apply(
-        child_values_path, settings_file_kind, None, diff.added, diff.removed
+        child_values_path,
+        settings_file_kind,
+        None,
+        diff.added,
+        diff.removed,
+        defaults,
     )
     parent_modified = False
     if parent_values_path is not None:
@@ -122,7 +130,15 @@ def run(
             subkey,
             diff.added,
             diff.removed,
+            defaults,
         )
+
+    # `defaults` is empty for dotnet-conf and angular-settings, so their keys
+    # report the blank each patcher writes.
+    added_values = {
+        key: patch_dotnet.rendered(patch_dotnet.value_for(key, leaf_type, defaults))
+        for key, leaf_type in diff.added.items()
+    }
 
     return RunResult(
         previous_tag=prev_tag,
@@ -130,24 +146,33 @@ def run(
         removed=diff.removed,
         child_modified=child_modified,
         parent_modified=parent_modified,
+        added_values=added_values,
     )
 
 
-def _parse_and_flatten(raw: str, kind: str) -> Dict[str, LeafType]:
+def _parse_and_flatten(
+    raw: str, kind: str
+) -> Tuple[Dict[str, LeafType], Dict[str, Any]]:
+    """Each key's type, and, for dotnet-appsettings only, each key's value.
+
+    The value map feeds the dotnet patcher's defaults (see patch_dotnet.value_for).
+    The other kinds return none, so their new keys keep blank placeholders: see
+    flatten.py.
+    """
     if kind == "dotnet-appsettings":
         cleaned = strip_jsonc_comments(raw)
         try:
             data = json.loads(cleaned) if cleaned.strip() else {}
         except json.JSONDecodeError as exc:
             raise SettingsSyncError(f"Failed to parse appsettings: {exc}")
-        return flatten_dotnet(data)
+        return flatten_dotnet(data), flatten_dotnet_defaults(data)
     if kind == "dotnet-conf":
-        return flatten_dotnet_conf(raw)
+        return flatten_dotnet_conf(raw), {}
     try:
         data = json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError as exc:
         raise SettingsSyncError(f"Failed to parse angular settings: {exc}")
-    return flatten_angular(data)
+    return flatten_angular(data), {}
 
 
 def _apply(
@@ -156,6 +181,7 @@ def _apply(
     subkey: Optional[str],
     added: Dict[str, LeafType],
     removed: List[str],
+    defaults: Optional[Mapping[str, Any]] = None,
 ) -> bool:
     if not values_path.exists():
         return False
@@ -164,7 +190,7 @@ def _apply(
         return False
 
     if kind in ("dotnet-appsettings", "dotnet-conf"):
-        changed = patch_dotnet.patch_values(doc, subkey, added, removed)
+        changed = patch_dotnet.patch_values(doc, subkey, added, removed, defaults)
     else:
         changed = patch_angular.patch_values(doc, subkey, added, removed)
 

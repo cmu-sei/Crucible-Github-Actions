@@ -11,6 +11,12 @@ Three strategies:
     and emits the same `Section__Key` shape as flatten_dotnet. Every entry is
     treated as a STRING leaf since the .conf format is untyped.
 
+flatten_dotnet_defaults walks the same tree as flatten_dotnet but keeps each
+leaf's value, so the dotnet patcher can write an added key's real default
+(see patch_dotnet.value_for). The other two kinds have no equivalent: a sample .conf's commented lines are
+mostly examples (`# Pod__Url = pve1.local`), and an Angular settings.json holds
+development URLs, so their keys keep blank placeholders.
+
 Only scalar-array elements are expanded, and only element 0 is emitted as a
 placeholder (matching existing values.yaml convention). Object arrays and
 deeper array shapes beyond the first scalar element are not flattened further.
@@ -18,7 +24,7 @@ deeper array shapes beyond the first scalar element are not flattened further.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 
 class LeafType(str, Enum):
@@ -43,14 +49,28 @@ def _is_scalar(value: Any) -> bool:
 
 def flatten_dotnet(data: Any) -> Dict[str, LeafType]:
     result: Dict[str, LeafType] = {}
-    _walk_dotnet(data, [], result)
+    _walk_dotnet(data, [], result, _leaf_type)
     return result
 
 
-def _walk_dotnet(node: Any, path: list[str], out: Dict[str, LeafType]) -> None:
+def flatten_dotnet_defaults(data: Any) -> Dict[str, Any]:
+    """Same keys as flatten_dotnet, mapped to the value the file sets.
+
+    An appsettings.json value is what the app uses when the setting isn't
+    given. The dotnet patcher writes it for new keys, where a blank by type
+    ("", 0, false) would change the app's behavior.
+    """
+    result: Dict[str, Any] = {}
+    _walk_dotnet(data, [], result, lambda value: value)
+    return result
+
+
+def _walk_dotnet(
+    node: Any, path: list[str], out: Dict[str, Any], leaf: Callable[[Any], Any]
+) -> None:
     if isinstance(node, dict):
         for key, value in node.items():
-            _walk_dotnet(value, path + [str(key)], out)
+            _walk_dotnet(value, path + [str(key)], out, leaf)
         return
     if isinstance(node, list):
         if not node:
@@ -58,12 +78,11 @@ def _walk_dotnet(node: Any, path: list[str], out: Dict[str, LeafType]) -> None:
         first = node[0]
         if _is_scalar(first):
             key = "__".join(path + ["0"])
-            out[key] = _leaf_type(first)  # type: ignore[assignment]
+            out[key] = leaf(first)
         return
-    lt = _leaf_type(node)
-    if lt is None:
+    if not _is_scalar(node):
         return
-    out["__".join(path)] = lt
+    out["__".join(path)] = leaf(node)
 
 
 def flatten_dotnet_conf(raw: str) -> Dict[str, LeafType]:

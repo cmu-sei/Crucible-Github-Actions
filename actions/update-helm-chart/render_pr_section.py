@@ -19,10 +19,12 @@ def main() -> int:
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--readme-path", default="")
     parser.add_argument("--added", default="{}")
+    parser.add_argument("--added-values", default="{}")
     parser.add_argument("--removed", default="[]")
     args = parser.parse_args()
 
     added_raw = json.loads(args.added) if args.added.strip() else {}
+    added_values = json.loads(args.added_values) if args.added_values.strip() else {}
     removed = json.loads(args.removed) if args.removed.strip() else []
 
     added: dict[str, LeafType] = {
@@ -35,6 +37,7 @@ def main() -> int:
         readme_path=args.readme_path or None,
         added=added,
         removed=removed,
+        added_values={k: str(v) for k, v in added_values.items()},
     )
     if section:
         print(section)

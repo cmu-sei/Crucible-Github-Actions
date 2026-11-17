@@ -76,3 +76,42 @@ def test_settings_section_both_added_and_removed():
     assert "### Added" in section
     assert "### Removed" in section
     assert section.index("### Added") < section.index("### Removed")
+
+
+def test_settings_section_lists_each_added_key_with_its_value():
+    section = render_settings_section(
+        source_repo="cmu-sei/Vm.Api",
+        release_tag="3.13.0",
+        readme_path="charts/player/README.md",
+        added={
+            "Proxmox__GuestAgentTimeoutMilliseconds": LeafType.NUMBER,
+            "ClientSettings__CiteApiUrl": LeafType.STRING,
+            "Odd__Value": LeafType.STRING,
+            "No__Value": LeafType.BOOL,
+        },
+        removed=[],
+        added_values={
+            "Proxmox__GuestAgentTimeoutMilliseconds": "2000",
+            "ClientSettings__CiteApiUrl": '"http://localhost:4720/"',
+            "Odd__Value": '"a`b"',
+        },
+    )
+    assert section is not None
+    assert "Each key is listed with the value written to `values.yaml`." in section
+    assert "- `Proxmox__GuestAgentTimeoutMilliseconds`: `2000`" in section
+    assert '- `ClientSettings__CiteApiUrl`: `"http://localhost:4720/"`' in section
+    assert '- `Odd__Value`: `` "a`b" ``' in section
+    assert "- `No__Value`\n" in section + "\n"
+
+
+def test_settings_section_without_values_lists_keys_only():
+    section = render_settings_section(
+        source_repo="cmu-sei/Vm.Api",
+        release_tag="3.13.0",
+        readme_path=None,
+        added={"A__Key": LeafType.NUMBER},
+        removed=[],
+    )
+    assert section is not None
+    assert "- `A__Key`" in section
+    assert "value written" not in section

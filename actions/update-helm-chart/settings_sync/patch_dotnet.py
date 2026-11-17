@@ -8,7 +8,10 @@ Rules (spec: Dotnet-appsettings patcher):
   * Under a subkey (e.g. "player-api" in parent values.yaml) the env: block
     is NOT created. If missing, we skip — parent values.yaml is hand-curated.
   * Additions are appended at the end of the env: block.
-  * Blank values: string -> "", bool -> False, number -> 0.
+  * Values (see `value_for`): a key takes its entry in `defaults` (the value
+    appsettings.json sets), with strings and numbers of 1e6 or more quoted.
+    Keys with no entry (dotnet-conf passes none) get a blank by type:
+    string -> "", bool -> False, number -> 0.
   * Removals delete the key line in place; preceding comments are left alone.
   * Whitespace and dedented comments trailing the env: block stay trailing it,
     rather than being pushed between the old and new last keys — see
@@ -16,6 +19,7 @@ Rules (spec: Dotnet-appsettings patcher):
 """
 from __future__ import annotations
 
+import json
 from typing import Dict, List, Mapping, Optional
 
 from ruamel.yaml.comments import CommentedMap
@@ -33,11 +37,56 @@ _BLANK_BY_TYPE: Mapping[LeafType, object] = {
 }
 
 
+# Helm loads values-file numbers as float64, and the API charts render env values with
+# `tpl ($val | toString)`, which writes 1e6 and larger in scientific notation: 6000000000
+# becomes "6e+09", and .NET's configuration binder can't read that as an int or long. Quoted,
+# the number reaches the app as written.
+_QUOTE_NUMBERS_FROM = 1_000_000
+
+
+def value_for(
+    key: str, leaf_type: LeafType, defaults: Optional[Mapping[str, object]]
+) -> object:
+    """The chart value for a key that is new in this release.
+
+    Every type takes the appsettings.json value, because that is what the app
+    uses when the key isn't set: a blank such as "", 0 or false in a chart's
+    env: block sets the key and can change what the app does. Strings are often
+    development values (localhost URLs, connection strings), so the PR body
+    lists every value written for a reviewer to replace where needed. A key
+    with no value (dotnet-conf passes none) gets the blank for its type.
+    """
+    value = defaults.get(key) if defaults else None
+    if leaf_type is LeafType.STRING and isinstance(value, str):
+        return DoubleQuotedScalarString(value)
+    if leaf_type is LeafType.BOOL and isinstance(value, bool):
+        return value
+    if (
+        leaf_type is LeafType.NUMBER
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+    ):
+        if abs(value) >= _QUOTE_NUMBERS_FROM:
+            return DoubleQuotedScalarString(str(value))
+        return value
+    return _BLANK_BY_TYPE[leaf_type]
+
+
+def rendered(value: object) -> str:
+    """A chart value as it reads in values.yaml, for the PR body."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(str(value))
+    return str(value)
+
+
 def patch_values(
     doc: CommentedMap,
     subkey: Optional[str],
     added: Dict[str, LeafType],
     removed: List[str],
+    defaults: Optional[Mapping[str, object]] = None,
 ) -> bool:
     if not added and not removed:
         return False
@@ -58,7 +107,7 @@ def patch_values(
     for key, leaf_type in added.items():
         if key in container:
             continue
-        container[key] = _BLANK_BY_TYPE[leaf_type]
+        container[key] = value_for(key, leaf_type, defaults)
         modified = True
 
     last_after = next(reversed(container), None) if container else None

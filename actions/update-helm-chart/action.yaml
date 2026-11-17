@@ -86,6 +86,9 @@ outputs:
   settings_added:
     description: "JSON object mapping added flattened setting keys to their leaf type."
     value: ${{ steps.update.outputs.settings_added }}
+  settings_added_values:
+    description: "JSON object mapping each added flattened setting key to the value written to values.yaml, as it reads there (a quoted string, a number or true/false)."
+    value: ${{ steps.update.outputs.settings_added_values }}
   settings_removed:
     description: "JSON array of removed flattened setting keys."
     value: ${{ steps.update.outputs.settings_removed }}
@@ -267,6 +270,7 @@ runs:
         SOURCE_REPO: ${{ github.repository }}
         SETTINGS_CHANGED: ${{ steps.update.outputs.settings_changed }}
         SETTINGS_ADDED: ${{ steps.update.outputs.settings_added }}
+        SETTINGS_ADDED_VALUES: ${{ steps.update.outputs.settings_added_values }}
         SETTINGS_REMOVED: ${{ steps.update.outputs.settings_removed }}
         README_PATH: ${{ steps.readme.outputs.path }}
       run: |
@@ -278,6 +282,7 @@ runs:
             --release-tag "${APP_VERSION}" \
             --readme-path "${README_PATH}" \
             --added "${SETTINGS_ADDED:-{\}}" \
+            --added-values "${SETTINGS_ADDED_VALUES:-{\}}" \
             --removed "${SETTINGS_REMOVED:-[]}")
           if [ -n "$SECTION" ]; then
             PR_BODY=$(printf '%s\n\n%s\n' "${PR_BODY}" "${SECTION}")

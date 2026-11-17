@@ -18,12 +18,20 @@ def render_release_line(app_name: str, source_repo: str, release_tag: str) -> st
     )
 
 
+def _code(text: str) -> str:
+    """Inline code that survives a backtick in the text."""
+    if "`" in text:
+        return f"`` {text} ``"
+    return f"`{text}`"
+
+
 def render_settings_section(
     source_repo: str,
     release_tag: str,
     readme_path: Optional[str],
     added: Dict[str, LeafType],
     removed: List[str],
+    added_values: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     if not added and not removed:
         return None
@@ -40,8 +48,17 @@ def render_settings_section(
 
     if added:
         lines.append("### Added")
+        if added_values:
+            lines.append(
+                "Each key is listed with the value written to `values.yaml`. "
+                "A key the chart already set keeps the chart's value."
+            )
+            lines.append("")
         for key in sorted(added.keys()):
-            lines.append(f"- `{key}`")
+            if added_values and key in added_values:
+                lines.append(f"- `{key}`: {_code(added_values[key])}")
+            else:
+                lines.append(f"- `{key}`")
         lines.append("")
 
     if removed:
