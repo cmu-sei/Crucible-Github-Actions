@@ -820,7 +820,9 @@ The status-check context is `<caller job id> / Build and Test`, here `build-and-
 
 ### npm Build and Test
 
-`.github/workflows/npm-test.yaml` is a `workflow_call` reusable workflow that installs, tests and optionally lints and builds a UI repository (Angular apps built with npm). One job sets up Node with the npm cache, runs the install command, the lint command (if set), the test command, and the build command (if set), then uploads the coverage report as the `coverage` artifact, also when tests fail.
+`.github/workflows/npm-test.yaml` is a `workflow_call` reusable workflow that installs, tests and optionally lints, checks the formatting of and builds a UI repository (Angular apps built with npm). One job sets up Node with the npm cache, runs the install command, the lint command (if set), the format command (if set), the test command, and the build command (if set), then uploads the coverage report as the `coverage` artifact, also when tests fail.
+
+Lint and format check are separate steps, so the failed step's name shows which one failed. A lint failure stops the job before the format check: fixing the lint changes the code, so the format check would have to run again anyway.
 
 Commands are run with `bash -euo pipefail -c`, so a failing command fails the job. Coverage thresholds belong to the test runner (for example `coverageThresholds` in `angular.json`); the workflow only uploads the report.
 
@@ -834,6 +836,7 @@ Runs share the concurrency group `npm-test-<repository>-<workflow>-<ref>` with `
 | `install-command` |  | Installs dependencies. | `npm ci` |
 | `test-command` |  | Runs the tests once (no watch mode). | `npm run test:coverage` |
 | `lint-command` |  | Lints before the tests, e.g. `npm run lint`. Empty skips the step. | `""` |
+| `format-command` |  | Checks formatting after the lint, e.g. `npm run format:check` (`prettier --check .`). The step also fails if tracked files changed, so a command that rewrites files (`prettier --write .`) can't pass. Empty skips the step. | `""` |
 | `build-command` |  | Builds after the tests, e.g. `npx ng build --configuration production`. Empty skips the step. | `""` |
 | `coverage-path` |  | Coverage directory uploaded as the `coverage` artifact. Empty skips the upload. | `coverage` |
 | `timeout-minutes` |  | Job timeout. | `20` |
@@ -862,6 +865,8 @@ jobs:
       contents: read
     with:
       node-version: "24"
+      lint-command: npm run lint
+      format-command: npm run format:check
       build-command: npx ng build --configuration production
 ```
 

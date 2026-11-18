@@ -2,10 +2,10 @@
 # built with npm).
 #
 # Pipeline shape (single job): validate -> checkout -> setup Node (npm cache)
-# -> install -> (lint) -> test -> (build) -> upload coverage.
+# -> install -> (lint) -> (format check) -> test -> (build) -> upload coverage.
 #
-# Lint and build are off unless the caller passes a command, so a repository
-# can turn each one on once it passes. The coverage report is uploaded as the
+# Lint, format check and build are off unless the caller passes a command, so
+# a repository can turn each one on once it passes. The coverage report is uploaded as the
 # `coverage` artifact, also when tests fail; coverage thresholds, if any, are
 # the test runner's own (for example angular.json `coverageThresholds`).
 
@@ -28,6 +28,10 @@ on:
         default: npm run test:coverage
       lint-command:
         description: "Shell command that lints, run before the tests (e.g. npm run lint). Empty = skip."
+        type: string
+        default: ""
+      format-command:
+        description: "Shell command that checks formatting, run after the lint (e.g. npm run format:check). The step also fails if tracked files changed. Empty = skip."
         type: string
         default: ""
       build-command:
@@ -100,6 +104,16 @@ jobs:
         env:
           LINT_COMMAND: ${{ inputs.lint-command }}
         run: bash -euo pipefail -c "$LINT_COMMAND"
+
+      - name: Format check
+        if: inputs.format-command != ''
+        env:
+          FORMAT_COMMAND: ${{ inputs.format-command }}
+        # git diff catches a command that rewrites files (prettier --write)
+        # instead of checking them, which would otherwise pass.
+        run: |
+          bash -euo pipefail -c "$FORMAT_COMMAND"
+          git diff --exit-code || { echo "::error::Tracked files changed during the run (diff above). Run the format command locally and commit the result."; exit 1; }
 
       - name: Test
         env:
