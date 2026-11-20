@@ -4,11 +4,13 @@
 # Each platform builds on its native GitHub-hosted runner (amd64 on
 # ubuntu-24.04, arm64 on ubuntu-24.04-arm) in parallel.
 #
-# Push path: each build job pushes by digest only (no tags); the merge
-# job then assembles a multi-arch manifest list over those digests with
-# `docker buildx imagetools create` and applies the final tag set.
-# No-push path (PRs, explicit push=false): builds run for validation
-# only and merge is skipped entirely.
+# On the push path each build job: builds the default stage with load (when
+# startupTest is true), runs a startup test against the loaded image
+# (default on, opt-out with startupTest: false), then pushes by digest only
+# (no tags); the merge job assembles a multi-arch manifest list over those
+# digests and applies the final tag set. No-push path (PRs, explicit
+# push=false): builds and tests run for validation only and merge is skipped
+# entirely.
 
 name: Build & Publish Image
 
@@ -58,6 +60,21 @@ on:
         description: "Optional shell commands to run before docker build (e.g. fetch artifacts). Runs as caller-supplied shell with the calling workflow's trust."
         type: string
         required: false
+      startupTest:
+        description: "Run a startup test after building the default stage"
+        type: boolean
+        required: false
+        default: true
+      startupTestPath:
+        description: "Health endpoint path to check (must start with /). Empty means try the default list."
+        type: string
+        required: false
+        default: ""
+      startupTestEnv:
+        description: "Additional environment variables for the startup test (newline-separated KEY=VALUE, applied after defaults; blank lines and lines starting with # are skipped)"
+        type: string
+        required: false
+        default: ""
 
     secrets:
       DOCKERHUB_USERNAME:
@@ -300,6 +317,239 @@ jobs:
           images: ${{ inputs.imageName }}
           tags: |
 
+      - name: Build default stage for startup test
+        id: build_startup_test
+        if: inputs.startupTest
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ inputs.dockerfilePath }}
+          platforms: ${{ matrix.platform }}
+          pull: true
+          load: true
+          push: false
+          tags: startup-test:local
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ steps.combined_build_args.outputs.args }}
+          cache-from: type=gha,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
+          cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
+
+      - name: Startup test default stage
+        id: startup_test
+        if: inputs.startupTest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Validate STARTUP_TEST_PATH
+          if [[ -n "$STARTUP_TEST_PATH" ]]; then
+            if [[ ! "$STARTUP_TEST_PATH" =~ ^/ ]]; then
+              echo "::error title=Startup test failed::STARTUP_TEST_PATH must start with /"
+              exit 1
+            fi
+            if [[ "$STARTUP_TEST_PATH" =~ [[:space:]]|[[:cntrl:]] ]]; then
+              echo "::error title=Startup test failed::STARTUP_TEST_PATH contains invalid characters"
+              exit 1
+            fi
+          fi
+
+          # Write the env file: defaults first, then the validated caller env
+          # (CR stripped, blank and comment lines skipped), so caller values
+          # override.
+          env_file="$RUNNER_TEMP/startup-test.env"
+          {
+            echo "Database__Provider=PostgreSQL"
+            echo "ConnectionStrings__PostgreSQL=Server=localhost;Port=5432;Database=startuptest;Username=postgres;Password=startuptest"
+            echo "Database__ConnectionString=Server=localhost;Port=5432;Database=startuptest;Username=postgres;Password=startuptest"
+            echo "Oidc__RequireHttpsMetadata=false"
+            echo "GameEngine__ClientId=startuptest"
+            echo "GameEngine__ClientSecret=startuptest"
+          } > "$env_file"
+          if [[ -n "$STARTUP_TEST_ENV" ]]; then
+            line_num=0
+            while IFS= read -r line; do
+              line_num=$((line_num + 1))
+              # Like docker --env-file: strip CR and leading whitespace, then
+              # skip blank and comment lines
+              line="${line%$'\r'}"
+              line="${line#"${line%%[![:space:]]*}"}"
+              [[ -z "$line" ]] && continue
+              [[ "$line" == \#* ]] && continue
+              if [[ ! "$line" =~ ^[A-Za-z_][A-Za-z0-9_.]*= ]]; then
+                echo "::error title=Startup test failed::Invalid env line $line_num"
+                exit 1
+              fi
+              echo "$line" >> "$env_file"
+            done <<< "$STARTUP_TEST_ENV"
+          fi
+
+          # Cleanup on exit
+          cleanup() {
+            docker rm -f startup-test-app startup-test-postgres >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # Detect port from ExposedPorts
+          inspect_err="$RUNNER_TEMP/startup-test-inspect.err"
+          if ! exposed="$(docker image inspect -f '{{json .Config.ExposedPorts}}' "$IMAGE" 2>"$inspect_err")"; then
+            cat "$inspect_err" >&2 || true
+            echo "::error title=Startup test failed::Failed to inspect image"
+            exit 1
+          fi
+          port=8080
+          if [[ "$exposed" != "null" ]]; then
+            tcp_ports="$(echo "$exposed" | jq -r 'keys[] | select(endswith("/tcp"))' | sed 's|/tcp||' || true)"
+            if [[ -n "$tcp_ports" ]]; then
+              port="$(echo "$tcp_ports" | sort -n | head -n1)"
+            fi
+          fi
+
+          # Determine paths to check
+          if [[ -n "$STARTUP_TEST_PATH" ]]; then
+            paths=("$STARTUP_TEST_PATH")
+          else
+            paths=("/api/health/ready" "/api/health/version" "/api/status" "/")
+          fi
+
+          echo "Startup test: image $IMAGE, port $port, paths ${paths[*]}"
+
+          # Pull Postgres image (docker's stderr stays visible in the log)
+          if ! docker pull -q "$PG_IMAGE"; then
+            echo "::error title=Startup test failed::Failed to pull Postgres image"
+            exit 1
+          fi
+
+          # Start Postgres
+          if ! docker run -d --name startup-test-postgres \
+            -p "127.0.0.1:${port}:${port}" \
+            -e POSTGRES_PASSWORD=startuptest \
+            -e POSTGRES_DB=startuptest \
+            "$PG_IMAGE" >/dev/null; then
+            echo "::error title=Startup test failed::Failed to start Postgres container"
+            exit 1
+          fi
+
+          # Wait for Postgres to be ready
+          pg_ready=false
+          for _ in {1..60}; do
+            if docker exec startup-test-postgres pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              pg_ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$pg_ready" != "true" ]]; then
+            echo "::group::Container logs"
+            docker logs --tail 200 startup-test-postgres || true
+            echo "::endgroup::"
+            echo "::error title=Startup test failed::Postgres failed to become ready"
+            exit 1
+          fi
+
+          # Start the app
+          if ! docker run -d --name startup-test-app \
+            --network "container:startup-test-postgres" \
+            --env-file "$env_file" \
+            "$IMAGE" >/dev/null; then
+            echo "::group::Container logs"
+            docker logs --tail 200 startup-test-app 2>/dev/null || true
+            echo "::endgroup::"
+            echo "::error title=Startup test failed::Failed to start container"
+            exit 1
+          fi
+
+          # Poll for health. With the default list, the first path that
+          # answers 5xx (a health endpoint reporting unhealthy) is locked:
+          # later rounds poll only that path, and success needs a 200 from it.
+          # Any other non-200 answer (404, 401, 3xx, no response) moves on.
+          max_rounds=$((STARTUP_TEST_TIMEOUT_SECONDS / STARTUP_TEST_POLL_SECONDS))
+          healthy=false
+          declare -A last_code
+          locked_path=""
+          deadline=$((SECONDS + STARTUP_TEST_TIMEOUT_SECONDS))
+
+          for ((round=1; round<=max_rounds; round++)); do
+            # Check if container is still running
+            state="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' startup-test-app 2>/dev/null || echo "unknown 0")"
+            status="${state%% *}"
+            if [[ "$status" != "running" ]]; then
+              exit_code="${state##* }"
+              echo "::group::Container logs"
+              docker logs --tail 200 startup-test-app || true
+              echo "::endgroup::"
+              echo "::error title=Startup test failed::Container $status with exit code $exit_code"
+              exit 1
+            fi
+
+            # Try each path (only the locked one once a path is locked)
+            if [[ -n "$locked_path" ]]; then
+              round_paths=("$locked_path")
+            else
+              round_paths=("${paths[@]}")
+            fi
+            for path in "${round_paths[@]}"; do
+              # Never start a request at or past the deadline, and never let
+              # one run past it
+              remaining=$((deadline - SECONDS))
+              if [[ "$remaining" -le 0 ]]; then
+                break 2
+              fi
+              max_time=$((remaining < 5 ? remaining : 5))
+              code="$(curl --globoff -s -o /dev/null -w '%{http_code}' --max-time "$max_time" "http://127.0.0.1:${port}${path}" 2>/dev/null || true)"
+              code="${code:-000}"
+              # A response that arrives at or after the deadline does not count
+              if [[ "$SECONDS" -ge "$deadline" ]]; then
+                break 2
+              fi
+              last_code["$path"]="$code"
+              if [[ "$code" == "200" ]]; then
+                healthy=true
+                success_path="$path"
+                break 2
+              fi
+              if [[ -z "$STARTUP_TEST_PATH" && -z "$locked_path" && "$code" == 5?? ]]; then
+                locked_path="$path"
+                echo "Startup test: using $path (answered $code)"
+                break
+              fi
+            done
+
+            # Check wall-clock deadline
+            if [[ "$SECONDS" -ge "$deadline" ]]; then
+              break
+            fi
+
+            sleep "$STARTUP_TEST_POLL_SECONDS"
+          done
+
+          if [[ "$healthy" != "true" ]]; then
+            echo "::group::Container logs"
+            docker logs --tail 200 startup-test-app || true
+            echo "::endgroup::"
+            status_msg=""
+            if [[ -n "$locked_path" ]]; then
+              report_paths=("$locked_path")
+            else
+              report_paths=("${paths[@]}")
+            fi
+            for path in "${report_paths[@]}"; do
+              code="${last_code[$path]:-000}"
+              status_msg="${status_msg:+$status_msg }${path}=${code}"
+            done
+            echo "::error title=Startup test failed::Timeout waiting for healthy response (last status: $status_msg)"
+            exit 1
+          fi
+
+          echo "Startup test passed: $success_path returned 200 on port $port"
+        env:
+          IMAGE: startup-test:local
+          STARTUP_TEST_PATH: ${{ inputs.startupTestPath }}
+          STARTUP_TEST_ENV: ${{ inputs.startupTestEnv }}
+          STARTUP_TEST_TIMEOUT_SECONDS: '120'
+          STARTUP_TEST_POLL_SECONDS: '2'
+          PG_IMAGE: postgres:17.6
+
       # Push-by-digest: upload the image content but do not apply any
       # tags yet. The merge job collects digests from every platform
       # and creates the final multi-arch tagged manifest list.
@@ -320,7 +570,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ needs.prepare.outputs.image_slug }}-${{ matrix.safe }}-default
 
       - name: Build (no push) default stage
-        if: needs.prepare.outputs.push != 'true'
+        if: needs.prepare.outputs.push != 'true' && !inputs.startupTest
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
